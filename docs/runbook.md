@@ -390,29 +390,95 @@ tenant_id.keyword
     → exact-value field
 ```
 
-## 12. Query Gateway prototype
+## 12. Tenant isolation prototype
 
-The prototype gateway runs on:
-
-```text
-:8080
-```
-
-Current API:
+The current prototype uses a shared OpenSearch index:
 
 ```text
-POST /logs/search
+tenant-test
+├── tenant-A
+└── tenant-B
 ```
 
-The lab uses:
+### Insert Tenant A
+
+```bash
+curl -X POST \
+  "http://localhost:9200/tenant-test/_doc" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "tenant-A",
+    "service": "payment",
+    "level": "ERROR",
+    "message": "database timeout from tenant A"
+  }'
+```
+
+### Insert Tenant B
+
+```bash
+curl -X POST \
+  "http://localhost:9200/tenant-test/_doc" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "tenant-B",
+    "service": "payment",
+    "level": "ERROR",
+    "message": "database timeout from tenant B"
+  }'
+```
+
+### Query Tenant A
+
+```bash
+curl -X GET \
+  "http://localhost:9200/tenant-test/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": {
+      "term": {
+        "tenant_id.keyword": "tenant-A"
+      }
+    }
+  }'
+```
+
+Expected result:
+
+```text
+Only documents belonging to tenant-A
+```
+
+### Query Tenant B
+
+```bash
+curl -X GET \
+  "http://localhost:9200/tenant-test/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": {
+      "term": {
+        "tenant_id.keyword": "tenant-B"
+      }
+    }
+  }'
+```
+
+Expected result:
+
+```text
+Only documents belonging to tenant-B
+```
+
+### Tenant A through Query Gateway
+
+The prototype Gateway uses:
 
 ```text
 X-Tenant-ID: tenant-A
 ```
 
-as a **fake trusted identity**.
-
-Example:
+as a trusted tenant identity for the lab.
 
 ```bash
 curl -X POST \
@@ -428,37 +494,117 @@ curl -X POST \
   http://localhost:8080/logs/search
 ```
 
-The gateway adds:
+Expected result:
 
 ```text
-tenant_id.keyword = tenant-A
+Only tenant-A documents
 ```
 
-to the query.
+### Tenant B through Query Gateway
 
-### Isolation probe
+```bash
+curl -X POST \
+  -H "X-Tenant-ID: tenant-B" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": {
+      "term": {
+        "level.keyword": "ERROR"
+      }
+    }
+  }' \
+  http://localhost:8080/logs/search
+```
 
-A client claiming:
+Expected result:
 
 ```text
+Only tenant-B documents
+```
+
+### Tenant A attempts to access Tenant B
+
+The client belongs to Tenant A but attempts to query Tenant B:
+
+```bash
+curl -X POST \
+  -H "X-Tenant-ID: tenant-A" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": {
+      "term": {
+        "tenant_id.keyword": "tenant-B"
+      }
+    }
+  }' \
+  http://localhost:8080/logs/search
+```
+
+Expected result:
+
+```text
+0 documents
+```
+
+The Gateway combines the client query with the trusted tenant filter:
+
+```text
+client query
+    AND
+tenant_id.keyword = trusted tenant
+```
+
+Therefore, a client belonging to Tenant A cannot override the tenant filter by requesting Tenant B.
+
+### Tenant B attempts to access Tenant A
+
+```bash
+curl -X POST \
+  -H "X-Tenant-ID: tenant-B" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": {
+      "term": {
+        "tenant_id.keyword": "tenant-A"
+      }
+    }
+  }' \
+  http://localhost:8080/logs/search
+```
+
+Expected result:
+
+```text
+0 documents
+```
+
+### Verification summary
+
+```text
+Direct OpenSearch:
+
+POST tenant-A
+POST tenant-B
+      ↓
+query A → A only
+query B → B only
+
+
+Query Gateway:
+
 X-Tenant-ID: tenant-A
+      ↓
+query A → A only
+query B → 0 results
+
+X-Tenant-ID: tenant-B
+      ↓
+query B → B only
+query A → 0 results
 ```
 
-but attempting:
+> Note: `X-Tenant-ID` is only a lab mechanism. It is not an authentication mechanism. In the target architecture, tenant identity should come from a verified OIDC/JWT identity.
 
-```text
-tenant_id.keyword = tenant-B
-```
-
-should receive zero results.
-
-This demonstrates the prototype's server-side tenant enforcement.
-
-Important:
-
-`X-Tenant-ID` is NOT authentication.
-
-It is only a lab mechanism for demonstrating the concept. In the target architecture, tenant identity should come from a verified OIDC/JWT identity.
 
 ## 13. Verification principle
 
