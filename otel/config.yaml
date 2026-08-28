@@ -1,0 +1,67 @@
+receivers:
+  host_metrics:
+    collection_interval: 5s
+    root_path: /hostfs
+    scrapers:
+      cpu:
+      memory:
+
+  file_log/syslog:
+    include:
+      - /hostfs/var/log/syslog
+    start_at: end
+    operators:
+      - type: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2}) (?P<message>.*)$'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%Y-%m-%dT%H:%M:%S.%f%z'
+        output:
+          parse_from: attributes.message
+
+  file_log/grafana:
+    include:
+      - /hostfs/var/lib/docker/containers/c60584d5fee3179718d4a4ea2e02bba6e7b5bfc5b33245c20a3df7d4230b89d0/c60584d5fee3179718d4a4ea2e02bba6e7b5bfc5b33245c20a3df7d4230b89d0-json.log
+    start_at: end
+    operators:
+      - type: container
+        format: docker
+
+processors:
+  resource:
+    attributes:
+      - key: environment
+        value: sandbox
+        action: upsert
+      - key: region
+        value: lab
+        action: upsert
+
+exporters:
+  prometheus_remote_write:
+    endpoint: http://victoriametrics:8428/api/v1/write
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  opensearch:
+    http:
+      endpoint: http://opensearch:9200
+
+service:
+  pipelines:
+    metrics:
+      receivers:
+        - host_metrics
+      processors:
+        - resource
+      exporters:
+        - prometheus_remote_write
+
+    logs:
+      receivers:
+        - file_log/syslog
+        - file_log/grafana
+      processors:
+        - resource
+      exporters:
+        - opensearch

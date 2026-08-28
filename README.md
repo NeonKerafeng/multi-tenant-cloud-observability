@@ -1,24 +1,25 @@
 # Cloud Observability Multi-Tenant PoC
 
-## Mục tiêu
-PoC observability multi-tenant thu thập Metrics + Logs, có tenant isolation ở ingest và query.
+## Overview
 
-## Baseline hiện tại
-- Docker stack: Grafana, OpenSearch, VictoriaMetrics, OpenTelemetry Collector
-- End-to-end connectivity hoạt động
-- Có context/resource enrichment
+This project is a from-scratch PoC for a multi-tenant cloud observability system.
+
+The target system collects metrics and logs from a cloud platform, stores metrics in VictoriaMetrics and logs in OpenSearch, and provides visualization through Grafana. Tenant identity and access control are intended to be handled through OIDC/Keycloak and gateway services.
+
+## Target architecture
 
 ```text
                          Identity Plane
+
                      ┌──────────────────┐
                      │     Keycloak     │
                      │ OIDC + tenant    │
                      │ + role           │
                      └────────┬─────────┘
                               │
-         ┌────────────────────┴─────────────────────┐
-         │                                          │
-         ▼                                          ▼
+        ┌─────────────────────┴─────────────────────┐
+        │                                           │
+        ▼                                           ▼
 
    INGESTION PLANE                              QUERY PLANE
 
@@ -48,43 +49,102 @@ PoC observability multi-tenant thu thập Metrics + Logs, có tenant isolation �
 │ native      │ │ tenant index │       └─────────────┘ └──────────────┘
 │ tenant      │ │ / DLS        │
 └─────────────┘ └──────────────┘
+```
 
-## Tenant flow
-1. Agent gửi token + logstore name tới ingest server của region.
-2. Ingest server xác thực token.
-3. Ingest server tra mapping backend để xác định tenant và destination.
-4. Gateway tạo trusted `tenant.id`; không tin `tenant.id` do client tự gửi.
-5. Metrics -> VictoriaMetrics; Logs -> OpenSearch data stream/index tương ứng.
-6. Query Gateway enforce tenant scope lần nữa trước khi proxy query.
+## Current PoC architecture
 
-## Repository layout
+The current sandbox runs all components on one Ubuntu VM:
+
+```text
+Host
+ ├── metrics ──→ OTel Collector ──→ VictoriaMetrics
+ ├── syslog ───→ OTel Collector ──→ OpenSearch
+ └── docker log → OTel Collector ──→ OpenSearch
+
+Grafana ──→ VictoriaMetrics
+Grafana ──→ OpenSearch
+
+Query Gateway ──→ OpenSearch
+```
+
+## Components
+
+| Component | Role | Port |
+|---|---|---:|
+| Grafana | Dashboard, visualization and query UI | 3000 |
+| VictoriaMetrics | Metrics storage and query backend | 8428 |
+| OpenSearch | Logs storage and search backend | 9200 |
+| OTel Collector | Collect, process and export telemetry | 4317 / 4318 |
+| Query Gateway | Prototype tenant enforcement and query proxy | 8080 |
+
+OTel ports 4317/4318 are currently internal container ports in the sandbox; they are not published to the host.
+
+## Implemented
+
+- Host CPU and memory metrics → OTel Collector → VictoriaMetrics
+- Linux syslog → OTel Collector → OpenSearch
+- Docker container logs → OTel Collector → OpenSearch
+- Docker JSON log parsing
+- Resource metadata enrichment:
+  - `environment=sandbox`
+  - `region=lab`
+- Grafana → VictoriaMetrics datasource
+- Grafana → OpenSearch datasource
+- Basic tenant query enforcement prototype
+- Shared-index tenant filtering prototype in OpenSearch
+
+## Current status
+
+This is a development/sandbox PoC.
+
+Implemented:
+
+- Basic metrics pipeline
+- Basic logs pipeline
+- Metrics and logs visualization
+- Resource enrichment
+- Prototype tenant isolation at query layer
+
+Not implemented yet:
+
+- Keycloak / OIDC authentication
+- Production-grade RBAC
+- Production-grade ingest gateway
+- Production-grade query gateway
+- Trusted tenant identity from JWT claims
+- Multi-region deployment
+- Benchmarking
+- Noisy-neighbor evaluation
+- Shared-index vs index-per-tenant benchmark
+- Production hardening
+
+## Repository structure
+
 ```text
 cloud-observability-poc/
 ├── README.md
-├── docker-compose.yml
-├── .env.example
 ├── .gitignore
-├── docs/
-├── otel-collector/
-├── grafana/
-├── opensearch/
-├── victoriametrics/
+├── otel/
+│   └── config.yaml
 ├── gateway/
-└── scripts/
+│   └── gateway.py
+└── docs/
+    └── runbook.md
 ```
 
-## Benchmark cần đo
-- ingestion throughput
-- query p50/p95/p99
-- CPU/RAM/storage
-- metric cardinality impact
-- noisy-neighbor
-- OpenSearch shared index/data stream vs index-per-tenant
+## Development environment
 
-## Deliverables
-- Architecture + tenant/security model
-- Metrics + Logs PoC
-- Tenant isolation ingest/query
-- Grafana user/admin dashboards
-- Benchmark report
-- Production recommendations
+Current PoC environment:
+
+```text
+VMware
+└── Ubuntu VM
+    └── Docker
+        ├── Grafana
+        ├── VictoriaMetrics
+        ├── OTel Collector
+        ├── OpenSearch
+        └── Query Gateway prototype
+```
+
+The sandbox is intentionally single-node. Production deployment is expected to distribute services across multiple nodes/instances and potentially multiple regions.
