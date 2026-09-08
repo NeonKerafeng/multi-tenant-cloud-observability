@@ -1,0 +1,28 @@
+name: cloud-observability
+
+include:
+  - deploy/compose/victoriametrics/single-node.yaml
+  - deploy/compose/opensearch/single-node.yaml
+
+services:
+  otel-gateway:
+    image: otel/opentelemetry-collector-contrib:0.160.0
+
+    restart: unless-stopped
+
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+
+    environment:
+      OPENSEARCH_USERNAME: ${OPENSEARCH_INGEST_USERNAME}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_INGEST_PASSWORD}
+
+    volumes:
+      - ./config/otel/gateway.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+    ports:
+      - "127.0.0.1:4318:4318"
+
+    networks:
+      - victoriametrics
+      - opensearch

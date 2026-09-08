@@ -1,0 +1,36 @@
+receivers:
+  host_metrics:
+    root_path: /hostfs
+    collection_interval: 10s
+
+    scrapers:
+      cpu:
+      memory:
+      load:
+      disk:
+      filesystem:
+      network:
+
+  journald:
+    root_path: /hostfs
+    journalctl_path: /usr/bin/journalctl
+    start_at: end
+
+processors:
+  batch:
+
+exporters:
+  otlp_http/gateway:
+    endpoint: http://127.0.0.1:4318
+
+service:
+  pipelines:
+    metrics:
+      receivers: [host_metrics]
+      processors: [batch]
+      exporters: [otlp_http/gateway]
+
+    logs:
+      receivers: [journald]
+      processors: [batch]
+      exporters: [otlp_http/gateway]

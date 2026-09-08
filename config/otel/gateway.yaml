@@ -1,0 +1,43 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+extensions:
+  basicauth/opensearch:
+    client_auth:
+      username: ${env:OPENSEARCH_USERNAME}
+      password: ${env:OPENSEARCH_PASSWORD}
+
+exporters:
+  otlp_http/victoriametrics:
+    metrics_endpoint: http://victoriametrics:8428/opentelemetry/v1/metrics
+
+  opensearch:
+    http:
+      endpoint: https://opensearch:9200
+      auth:
+        authenticator: basicauth/opensearch
+      tls:
+        insecure_skip_verify: true
+
+    logs_index: otel-logs
+
+service:
+  extensions:
+    - basicauth/opensearch
+
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/victoriametrics]
+
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [opensearch]

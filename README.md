@@ -1,150 +1,194 @@
-# Cloud Observability Multi-Tenant PoC
+# Multi-Tenant Cloud Observability
 
 ## Overview
 
-This project is a from-scratch PoC for a multi-tenant cloud observability system.
+This project is a comprehensive synthesis of my research on the `multi-tenant cloud observability` topic. It presents both a conceptual framework and a practical implementation guide for building such systems.
 
-The target system collects metrics and logs from a cloud platform, stores metrics in VictoriaMetrics and logs in OpenSearch, and provides visualization through Grafana. Tenant identity and access control are intended to be handled through OIDC/Keycloak and gateway services.
+As a built-from-scratch Proof of Concept (PoC) for a `multi-tenant cloud observability` system, the target system collects metrics and logs from a cloud platform, stores metrics in `VictoriaMetrics` and logs in `OpenSearch`, and provides visualization through `Grafana`. Tenant identity and access control are intended to be handled through `OIDC/Keycloak` and gateway services.
 
-## Target architecture
+## Architecture
 
-```text
-                         Identity Plane
+```
+                                      INGEST PLANE
 
-                     ┌──────────────────┐
-                     │     Keycloak     │
-                     │ OIDC + tenant    │
-                     │ + role           │
-                     └────────┬─────────┘
-                              │
-        ┌─────────────────────┴─────────────────────┐
-        │                                           │
-        ▼                                           ▼
 
-   INGESTION PLANE                              QUERY PLANE
-
-┌──────────────────┐                       ┌────────────────┐
-│ OTel Agent / SDK │                       │    Grafana     │
-└────────┬─────────┘                       └───────┬────────┘
-         │ OTLP                                    │
-         ▼                                         ▼
-┌──────────────────────────┐             ┌──────────────────────┐
-│ OTel Ingest Gateway      │             │ Observability Query  │
-│                          │             │ Gateway              │
-│ Authentication           │             │                      │
-│ Tenant Resolver          │             │ OIDC AuthN           │
-│ Tenant Enforcement       │             │ RBAC                 │
-│ Resource Enrichment      │             │ Tenant Enforcement   │
-│ Validation               │             │ Query Proxy          │
-│ Batch / Queue            │             └─────────┬────────────┘
-└───────────┬──────────────┘                       │
-            │                                      │
-      ┌─────┴───────┐                        ┌─────┴───────┐
-      │             │                        │             │
-      ▼             ▼                        ▼             ▼
-┌─────────────┐ ┌──────────────┐       ┌─────────────┐ ┌──────────────┐
-│ Victoria    │ │ OpenSearch   │       │ Victoria    │ │ OpenSearch   │
-│ Metrics     │ │ Logs         │       │ Metrics     │ │ Logs         │
-│             │ │              │       │ Query       │ │ Query        │
-│ native      │ │ tenant index │       └─────────────┘ └──────────────┘
-│ tenant      │ │ / DLS        │
-└─────────────┘ └──────────────┘
+                              ┌──────────────────────────┐
+                              │       OTel Agent         │
+                              │                          │
+                              │ Role:                    │
+                              │ Telemetry Collector      │
+                              │                          │
+                              │ - collect metrics        │
+                              │ - collect logs           │
+                              │ - export OTLP            │
+                              └────────────┬─────────────┘
+                                           │
+                                           │  PUSH — OTLP/HTTP
+                                           │
+                                           │  Authentication: ❌
+                                           │  Authorization:  ❌
+                                           │  Tenant-aware:   ❌
+                                           │
+                                           ▼
+                              ┌──────────────────────────┐
+                              │    OTel Ingest Gateway   │
+                              │                          │
+                              │ Role:                    │
+                              │ Trusted Ingest Gateway   │
+                              │                          │
+                              │ - authenticate client    │
+                              │ - authorize client       │
+                              │ - resolve tenant         │
+                              │ - enforce tenant         │
+                              │ - enrich telemetry       │
+                              │ - batch / route          │
+                              └────────────┬─────────────┘
+                                           │
+                         ┌─────────────────┴─────────────────┐
+                         │                                   │
+                         │  PUSH — Metrics                   │  PUSH — Logs
+                         │                                   │
+                         │  Authentication: ❌               │  Authentication: ✅
+                         │  Authorization:  ❌               │  Authorization:  ✅
+                         │  Tenant-aware:   ✅               │  Tenant-aware:   ✅
+                         │                                   │
+                         │  Tenant model:                    │  Service identity:
+                         │  accountID/projectID              │  otel-ingest
+                         │                                   │
+                         │                                   │  Role:
+                         │                                   │  otel-ingest-role
+                         │                                   │
+                         ▼                                   ▼
+              ┌──────────────────────────┐       ┌──────────────────────────┐
+              │    VictoriaMetrics       │       │       OpenSearch         │
+              │       Cluster            │       │                          │
+              │                          │       │ Role:                    │
+              │ Role:                    │       │ Log Storage / Search     │
+              │ Metrics Storage          │       │                          │
+              │                          │       │ Multi-tenancy:           │
+              │ Multi-tenancy: Native    │       │    "shared index"        │
+              │                          │       │    + tenant.id           │
+              │ accountID/projectID      │       │    + DLS                 │
+              │                          │       │                          │
+              └──────────────────────────┘       └──────────────────────────┘
 ```
 
-## Current PoC architecture
+```
+                             QUERY PLANE
 
-The current sandbox runs all components on one Ubuntu VM:
+         USER SIDE                                 PLATFORM SIDE
 
-```text
-Host
- ├── metrics ──→ OTel Collector ──→ VictoriaMetrics
- ├── syslog ───→ OTel Collector ──→ OpenSearch
- └── docker log → OTel Collector ──→ OpenSearch
 
-Grafana ──→ VictoriaMetrics
-Grafana ──→ OpenSearch
-
-Query Gateway ──→ OpenSearch
+┌───────────────────────────┐
+│           User            │
+└─────────────┬─────────────┘
+              │
+              │ Login
+              │
+              │ AuthN: ⏳ planned
+              ▼
+┌───────────────────────────┐
+│         Keycloak          │
+│                           │
+│     OIDC Identity         │
+│   tenant + user + role    │
+└─────────────┬─────────────┘
+              │
+              │ JWT / OIDC token
+              ▼
+┌───────────────────────────┐
+│          Grafana          │
+│                           │
+│ Visualization / frontend  │
+└─────────────┬─────────────┘
+              │
+              │ QUERY
+              │
+              ▼
+┌──────────────────────────────────────────────┐
+│             Observability Query Gateway      │
+│                                              │
+│  AuthN: validate OIDC token                  │
+│  AuthZ: resolve role / tenant                │
+│  Tenant enforcement                         │
+│  Query routing / proxy                      │
+└───────────────────┬──────────────────────────┘
+                    │
+           ┌────────┴────────┐
+           │                 │
+           │ QUERY           │ QUERY
+           │                 │
+           ▼                 ▼
+┌──────────────────┐  ┌──────────────────┐
+│ VictoriaMetrics  │  │    OpenSearch    │
+│                  │  │                  │
+│ metrics          │  │ logs             │
+└──────────────────┘  └──────────────────┘
+         │                    │
+         │                    │
+ Future tenant model:    Future tenant model:
+         │                    │
+ accountID/projectID     shared index
+ native tenant           + tenant.id
+ namespace               + DLS
+         │                    │
+         ▼                    ▼
+      Tenant A              Tenant A
+      Tenant B              Tenant B
+      Tenant C              Tenant C
 ```
 
-## Components
 
-| Component | Role | Port |
-|---|---|---:|
-| Grafana | Dashboard, visualization and query UI | 3000 |
-| VictoriaMetrics | Metrics storage and query backend | 8428 |
-| OpenSearch | Logs storage and search backend | 9200 |
-| OTel Collector | Collect, process and export telemetry | 4317 / 4318 |
-| Query Gateway | Prototype tenant enforcement and query proxy | 8080 |
 
-OTel ports 4317/4318 are currently internal container ports in the sandbox; they are not published to the host.
+```
+                    CURRENT DEBUG QUERY PATH
 
-## Implemented
-
-- Host CPU and memory metrics → OTel Collector → VictoriaMetrics
-- Linux syslog → OTel Collector → OpenSearch
-- Docker container logs → OTel Collector → OpenSearch
-- Docker JSON log parsing
-- Resource metadata enrichment:
-  - `environment=sandbox`
-  - `region=lab`
-- Grafana → VictoriaMetrics datasource
-- Grafana → OpenSearch datasource
-- Basic tenant query enforcement prototype
-- Shared-index tenant filtering prototype in OpenSearch
-
-## Current status
-
-This is a development/sandbox PoC.
-
-Implemented:
-
-- Basic metrics pipeline
-- Basic logs pipeline
-- Metrics and logs visualization
-- Resource enrichment
-- Prototype tenant isolation at query layer
-
-Not implemented yet:
-
-- Keycloak / OIDC authentication
-- Production-grade RBAC
-- Production-grade ingest gateway
-- Production-grade query gateway
-- Trusted tenant identity from JWT claims
-- Multi-region deployment
-- Benchmarking
-- Noisy-neighbor evaluation
-- Shared-index vs index-per-tenant benchmark
-- Production hardening
-
-## Repository structure
-
-```text
-cloud-observability-poc/
-├── README.md
-├── .gitignore
-├── otel/
-│   └── config.yaml
-├── gateway/
-│   └── gateway.py
-└── docs/
-    └── runbook.md
+curl
+ │
+ ├──── GET /api/v1/query ─────────────▶ VictoriaMetrics
+ │                                      AuthN: ❌
+ │                                      AuthZ: ❌
+ │
+ └──── HTTPS + admin credential ──────▶ OpenSearch
+                                        AuthN: ✅
+                                        AuthZ: ✅ admin
 ```
 
-## Development environment
-
-Current PoC environment:
-
-```text
-VMware
-└── Ubuntu VM
-    └── Docker
-        ├── Grafana
-        ├── VictoriaMetrics
-        ├── OTel Collector
-        ├── OpenSearch
-        └── Query Gateway prototype
 ```
+                               MULTI-TENANT INGEST
 
-The sandbox is intentionally single-node. Production deployment is expected to distribute services across multiple nodes/instances and potentially multiple regions.
+Tenant A Agent ──┐
+Tenant A Agent ──┤
+Tenant B Agent ──┤
+Tenant C Agent ──┘
+                 │
+                 │ OTLP
+                 │
+                 │ AuthN:
+                 │ prove client identity
+                 │
+                 │ AuthZ:
+                 │ determine allowed tenant
+                 │
+                 ▼
+        ┌───────────────────────┐
+        │   Ingest Gateway      │
+        │                       │
+        │ authenticate          │
+        │ authorize             │
+        │ resolve tenant        │
+        │ enforce tenant        │
+        │ enrich telemetry      │
+        └───────────┬───────────┘
+                    │
+             ┌──────┴───────┐
+             │              │
+             ▼              ▼
+      VictoriaMetrics    OpenSearch
+          Cluster
+             │              │
+     accountID/projectID     │ tenant.id
+             │              │
+        native tenant       shared index
+        namespace           + DLS
+```
