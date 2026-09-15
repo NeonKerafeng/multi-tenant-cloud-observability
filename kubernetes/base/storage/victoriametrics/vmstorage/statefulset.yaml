@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vmstorage
+
+spec:
+  serviceName: vmstorage
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: vmstorage
+
+  template:
+    metadata:
+      labels:
+        app: vmstorage
+
+    spec:
+      containers:
+        - name: vmstorage
+          image: victoriametrics/vmstorage:v1.150.0-cluster
+
+          args:
+            - -storageDataPath=/vmstorage-data
+
+          ports:
+            - name: vminsert
+              containerPort: 8400
+
+            - name: vmselect
+              containerPort: 8401
+
+            - name: http
+              containerPort: 8482
+
+          volumeMounts:
+            - name: data
+              mountPath: /vmstorage-data
+
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vmstorage
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+
+      spec:
+        accessModes:
+          - ReadWriteOnce
+
+        # storageClassName intentionally omitted.
+        # Base can use the cluster default StorageClass.
+        # Environment overlays may explicitly select another StorageClass.
+
+        resources:
+          requests:
+            storage: 10Gi
