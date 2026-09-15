@@ -11,3 +11,5 @@ volumes/
 # editor
 .vscode/
 .idea/
+
+/legacy
