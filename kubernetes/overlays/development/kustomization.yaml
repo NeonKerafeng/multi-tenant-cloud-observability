@@ -7,8 +7,21 @@ resources:
   - ../../base/foundation
   - ../../base/storage/victoriametrics
   - ../../base/storage/opensearch
+  - ../../base/ingest/otel-gateway
+  - ../../base/identity/keycloak
 
 secretGenerator:
   - name: opensearch-bootstrap
     envs:
       - secrets.env
+
+  - name: keycloak-db
+    envs:
+      - keycloak-db.env
+
+  - name: keycloak-admin
+    envs:
+      - keycloak-admin.env
+
+patches:
+  - path: patches/keycloak.yaml

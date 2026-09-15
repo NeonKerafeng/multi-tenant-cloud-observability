@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak-postgres
+
+spec:
+  serviceName: keycloak-postgres
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: keycloak-postgres
+
+  template:
+    metadata:
+      labels:
+        app: keycloak-postgres
+
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: database
+
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: username
+
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: password
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+
+      spec:
+        accessModes:
+          - ReadWriteOnce
+
+        # storageClassName intentionally omitted.
+        # Environment overlays may explicitly select one.
+
+        resources:
+          requests:
+            storage: 5Gi
