@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-bootstrap
+
+spec:
+  backoffLimit: 20
+
+  template:
+    metadata:
+      labels:
+        app: keycloak-bootstrap
+
+    spec:
+      restartPolicy: OnFailure
+
+      containers:
+        - name: bootstrap
+          image: quay.io/keycloak/keycloak:26.7.3
+
+          env:
+            - name: KEYCLOAK_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: username
+
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: password
+
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              KCADM=/opt/keycloak/bin/kcadm.sh
+              SERVER=http://keycloak:8080
+              REALM=observability
+
+              echo "Waiting for Keycloak..."
+
+              until $KCADM config credentials \
+                --server "$SERVER" \
+                --realm master \
+                --user "$KEYCLOAK_ADMIN_USERNAME" \
+                --password "$KEYCLOAK_ADMIN_PASSWORD";
+              do
+                sleep 5
+              done
+
+              if ! $KCADM get "realms/$REALM" >/dev/null 2>&1; then
+                echo "Creating realm: $REALM"
+
+                $KCADM create realms \
+                  -s realm="$REALM" \
+                  -s enabled=true
+              fi
+
+              for ROLE in platform-admin tenant-admin viewer; do
+                if ! $KCADM get "roles/$ROLE" \
+                  -r "$REALM" >/dev/null 2>&1;
+                then
+                  echo "Creating role: $ROLE"
+
+                  $KCADM create roles \
+                    -r "$REALM" \
+                    -s name="$ROLE"
+                fi
+              done
+
+              echo "Keycloak bootstrap complete."
