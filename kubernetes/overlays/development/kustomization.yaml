@@ -6,3 +6,9 @@ namespace: observability
 resources:
   - ../../base/foundation
   - ../../base/storage/victoriametrics
+  - ../../base/storage/opensearch
+
+secretGenerator:
+  - name: opensearch-bootstrap
+    envs:
+      - secrets.env
