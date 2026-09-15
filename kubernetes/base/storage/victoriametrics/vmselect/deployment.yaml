@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmselect
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: vmselect
+
+  template:
+    metadata:
+      labels:
+        app: vmselect
+
+    spec:
+      containers:
+        - name: vmselect
+          image: victoriametrics/vmselect:v1.150.0-cluster
+
+          args:
+            - -storageNode=vmstorage-0.vmstorage:8401
+            - -storageNode=vmstorage-1.vmstorage:8401
+
+          ports:
+            - name: http
+              containerPort: 8481
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vmselect
