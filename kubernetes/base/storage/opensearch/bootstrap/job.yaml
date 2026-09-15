@@ -1,0 +1,92 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-bootstrap
+
+spec:
+  backoffLimit: 10
+
+  template:
+    metadata:
+      labels:
+        app: opensearch-bootstrap
+
+    spec:
+      restartPolicy: OnFailure
+
+      containers:
+        - name: bootstrap
+          image: curlimages/curl:8.12.1
+
+          env:
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-bootstrap
+                  key: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+
+            - name: INGEST_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-ingest
+                  key: username
+
+            - name: INGEST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-ingest
+                  key: password
+
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Waiting for OpenSearch..."
+
+              until curl -ks \
+                -u "admin:${ADMIN_PASSWORD}" \
+                https://opensearch:9200 >/dev/null;
+              do
+                sleep 5
+              done
+
+              echo "Creating ingest role..."
+
+              curl -ks \
+                -u "admin:${ADMIN_PASSWORD}" \
+                -H 'Content-Type: application/json' \
+                -X PUT \
+                https://opensearch:9200/_plugins/_security/api/roles/otel-ingest-role \
+                -d '{
+                  "cluster_permissions": [
+                    "cluster_composite_ops"
+                  ],
+                  "index_permissions": [
+                    {
+                      "index_patterns": [
+                        "otel-logs*"
+                      ],
+                      "allowed_actions": [
+                        "create_index",
+                        "write"
+                      ]
+                    }
+                  ],
+                  "tenant_permissions": []
+                }'
+
+              echo "Creating ingest user..."
+
+              curl -ks \
+                -u "admin:${ADMIN_PASSWORD}" \
+                -H 'Content-Type: application/json' \
+                -X PUT \
+                "https://opensearch:9200/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
+                -d "{
+                  \"password\": \"${INGEST_PASSWORD}\",
+                  \"opendistro_security_roles\": [
+                    \"otel-ingest-role\"
+                  ]
+                }"
+
+              echo "OpenSearch bootstrap complete."
