@@ -16,6 +16,10 @@ secretGenerator:
     envs:
       - secrets.env
 
+  - name: opensearch-ingest
+    envs:
+      - opensearch-ingest.env
+
   - name: keycloak-db
     envs:
       - keycloak-db.env
