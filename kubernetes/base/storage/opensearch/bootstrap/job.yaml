@@ -43,16 +43,31 @@ spec:
             - |
               echo "Waiting for OpenSearch..."
 
-              until curl -ks \
+              MAX_ATTEMPTS=60
+              ATTEMPT=1
+
+              until curl -kfsS \
+                --connect-timeout 3 \
+                --max-time 5 \
                 -u "admin:${ADMIN_PASSWORD}" \
-                https://opensearch:9200 >/dev/null;
+                https://opensearch:9200/_cluster/health \
+                >/dev/null;
               do
+                if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+                  echo "OpenSearch did not become ready in time."
+                  exit 1
+                fi
+
+                echo "OpenSearch not ready yet (${ATTEMPT}/${MAX_ATTEMPTS})..."
+                ATTEMPT=$((ATTEMPT + 1))
                 sleep 5
               done
 
               echo "Creating ingest role..."
 
-              curl -ks \
+              curl -kfsS \
+                --connect-timeout 3 \
+                --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
                 -H 'Content-Type: application/json' \
                 -X PUT \
@@ -77,7 +92,9 @@ spec:
 
               echo "Creating ingest user..."
 
-              curl -ks \
+              curl -kfsS \
+                --connect-timeout 3 \
+                --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
                 -H 'Content-Type: application/json' \
                 -X PUT \
@@ -88,5 +105,23 @@ spec:
                     \"otel-ingest-role\"
                   ]
                 }"
+
+              echo "Verifying ingest role..."
+
+              curl -kfsS \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                "https://opensearch:9200/_plugins/_security/api/roles/otel-ingest-role" \
+                >/dev/null
+
+              echo "Verifying ingest user..."
+
+              curl -kfsS \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                "https://opensearch:9200/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
+                >/dev/null
 
               echo "OpenSearch bootstrap complete."
