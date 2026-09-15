@@ -4,12 +4,18 @@ __pycache__/
 *.log
 *.tmp
 
-# runtime/data
-data/
-volumes/
-
 # editor
 .vscode/
 .idea/
 
+#local
 /legacy
+/progress.txt
+/README_NOTES.local.md
+
+# Kubernetes
+kubernetes/overlays/development/secrets.env
+kubernetes/overlays/development/opensearch-ingest.env
+kubernetes/overlays/development/keycloak-db.env
+kubernetes/overlays/development/keycloak-admin.env
+kubernetes/overlays/development/grafana-admin.env
