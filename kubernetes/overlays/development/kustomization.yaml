@@ -9,6 +9,7 @@ resources:
   - ../../base/storage/opensearch
   - ../../base/ingest/otel-gateway
   - ../../base/identity/keycloak
+  - ../../base/query
 
 secretGenerator:
   - name: opensearch-bootstrap
@@ -22,6 +23,10 @@ secretGenerator:
   - name: keycloak-admin
     envs:
       - keycloak-admin.env
+
+  - name: grafana-admin
+    envs:
+      - grafana-admin.env
 
 patches:
   - path: patches/keycloak.yaml
