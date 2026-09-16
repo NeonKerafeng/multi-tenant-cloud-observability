@@ -90,6 +90,11 @@ spec:
                   "tenant_permissions": []
                 }'
 
+              ESCAPED_INGEST_PASSWORD=$(
+                printf '%s' "$INGEST_PASSWORD" |
+                  sed 's/\\/\\\\/g; s/"/\\"/g'
+              )
+
               echo "Creating ingest user..."
 
               curl -kfsS \
@@ -100,7 +105,7 @@ spec:
                 -X PUT \
                 "https://opensearch:9200/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
                 -d "{
-                  \"password\": \"${INGEST_PASSWORD}\",
+                  \"password\": \"${ESCAPED_INGEST_PASSWORD}\",
                   \"opendistro_security_roles\": [
                     \"otel-ingest-role\"
                   ]
