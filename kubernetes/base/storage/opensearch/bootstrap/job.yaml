@@ -5,6 +5,7 @@ metadata:
 
 spec:
   backoffLimit: 10
+  activeDeadlineSeconds: 900
 
   template:
     metadata:
@@ -17,6 +18,14 @@ spec:
       containers:
         - name: bootstrap
           image: curlimages/curl:8.12.1
+
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
 
           env:
             - name: ADMIN_PASSWORD
