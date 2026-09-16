@@ -40,6 +40,18 @@ spec:
                   name: keycloak-admin
                   key: password
 
+            - name: GRAFANA_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-oidc
+                  key: client_id
+
+            - name: GRAFANA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-oidc
+                  key: client_secret
+
           command:
             - /bin/sh
             - -ec
@@ -78,5 +90,50 @@ spec:
                     -s name="$ROLE"
                 fi
               done
+
+              echo "Ensuring Grafana OIDC client..."
+
+              GRAFANA_CLIENT_UUID=$(
+                $KCADM get clients \
+                  -r "$REALM" \
+                  -q clientId="$GRAFANA_CLIENT_ID" \
+                  --fields id \
+                  --format csv \
+                  --noquotes
+              )
+
+              if [ -z "$GRAFANA_CLIENT_UUID" ]; then
+                echo "Creating Grafana OIDC client..."
+
+                $KCADM create clients \
+                  -r "$REALM" \
+                  -s "clientId=$GRAFANA_CLIENT_ID" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s publicClient=false \
+                  -s clientAuthenticatorType=client-secret \
+                  -s "secret=$GRAFANA_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false \
+                  -s 'redirectUris=["http://localhost:3000/login/generic_oauth","http://127.0.0.1:3000/login/generic_oauth"]'
+
+              else
+                echo "Updating Grafana OIDC client..."
+
+                $KCADM update "clients/$GRAFANA_CLIENT_UUID" \
+                  -r "$REALM" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s publicClient=false \
+                  -s clientAuthenticatorType=client-secret \
+                  -s "secret=$GRAFANA_CLIENT_SECRET" \
+                  -s standardFlowEnabled=true \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false \
+                  -s 'redirectUris=["http://localhost:3000/login/generic_oauth","http://127.0.0.1:3000/login/generic_oauth"]'
+              fi
+
+              echo "Grafana OIDC client ready."
 
               echo "Keycloak bootstrap complete."

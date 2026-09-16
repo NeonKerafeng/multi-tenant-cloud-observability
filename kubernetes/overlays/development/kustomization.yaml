@@ -32,6 +32,10 @@ secretGenerator:
     envs:
       - grafana-admin.env
 
+  - name: grafana-oidc
+    envs:
+      - grafana-oidc.env
+
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway
