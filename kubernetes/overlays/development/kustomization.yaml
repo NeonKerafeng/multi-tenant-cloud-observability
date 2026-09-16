@@ -32,5 +32,10 @@ secretGenerator:
     envs:
       - grafana-admin.env
 
+images:
+  - name: query-gateway
+    newName: kerafeng/query-gateway
+    newTag: v0.1.0
+
 patches:
   - path: patches/keycloak.yaml
