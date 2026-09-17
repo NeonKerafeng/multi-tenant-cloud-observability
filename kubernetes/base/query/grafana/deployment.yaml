@@ -27,6 +27,7 @@ spec:
           image: grafana/grafana:13.2.1
 
           env:
+            # Grafana local admin
             - name: GF_SECURITY_ADMIN_USER
               valueFrom:
                 secretKeyRef:
@@ -39,6 +40,8 @@ spec:
                   name: grafana-admin
                   key: password
 
+
+            # OAuth basic config
             - name: GF_AUTH_GENERIC_OAUTH_ENABLED
               value: "true"
 
@@ -48,6 +51,8 @@ spec:
             - name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
               value: "true"
 
+
+            # Grafana OIDC client identity
             - name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -63,6 +68,8 @@ spec:
             - name: GF_AUTH_GENERIC_OAUTH_SCOPES
               value: "openid profile email"
 
+
+            # Keycloak OIDC endpoints
             - name: GF_AUTH_GENERIC_OAUTH_AUTH_URL
               value: http://localhost:8080/realms/observability/protocol/openid-connect/auth
 
@@ -72,9 +79,13 @@ spec:
             - name: GF_AUTH_GENERIC_OAUTH_API_URL
               value: http://keycloak:8080/realms/observability/protocol/openid-connect/userinfo
 
+
+            # Grafana public URL
             - name: GF_SERVER_ROOT_URL
               value: http://localhost:3000
 
+
+            # Keycloak role -> Grafana role
             - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH
               value: "contains(realm_access.roles[*], 'platform-admin') && 'Admin' || contains(realm_access.roles[*], 'tenant-admin') && 'Editor' || contains(realm_access.roles[*], 'viewer') && 'Viewer' || 'None'"
 
