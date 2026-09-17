@@ -36,8 +36,14 @@ spec:
             - name: OPENSEARCH_URL
               value: https://opensearch:9200
 
-            - name: NODE_EXTRA_CA_CERTS
+            - name: OPENSEARCH_CA_FILE
               value: /etc/observability/ca/ca.crt
+
+            - name: OPENSEARCH_CLIENT_CERT_FILE
+              value: /etc/observability/client-tls/tls.crt
+
+            - name: OPENSEARCH_CLIENT_KEY_FILE
+              value: /etc/observability/client-tls/tls.key
 
           readinessProbe:
             httpGet:
@@ -66,6 +72,10 @@ spec:
             mountPath: /etc/observability/ca
             readOnly: true
 
+          - name: query-gateway-client-tls
+            mountPath: /etc/observability/client-tls
+            readOnly: true
+
       volumes:
         - name: opensearch-ca
           secret:
@@ -73,6 +83,15 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+
+        - name: query-gateway-client-tls
+          secret:
+            secretName: query-gateway-tls
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
 
       topologySpreadConstraints:
         - maxSkew: 1

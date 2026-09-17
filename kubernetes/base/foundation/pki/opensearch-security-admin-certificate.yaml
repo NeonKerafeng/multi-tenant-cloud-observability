@@ -1,0 +1,24 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: opensearch-security-admin-tls
+
+spec:
+  secretName: opensearch-security-admin-tls
+  commonName: opensearch-security-admin
+
+  duration: 2160h
+  renewBefore: 360h
+
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    encoding: PKCS8
+    rotationPolicy: Always
+
+  usages:
+    - client auth
+
+  issuerRef:
+    name: observability-ca
+    kind: Issuer

@@ -39,7 +39,7 @@ secretGenerator:
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway
-    newTag: v0.1.0
+    newTag: v0.1.1
 
 patches:
   - path: patches/keycloak.yaml

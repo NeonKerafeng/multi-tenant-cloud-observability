@@ -83,6 +83,9 @@ spec:
             - name: plugins.security.ssl.http.pemtrustedcas_filepath
               value: certs/ca.crt
 
+            - name: plugins.security.ssl.http.clientauth_mode
+              value: OPTIONAL
+
           ports:
             - name: http
               containerPort: 9200

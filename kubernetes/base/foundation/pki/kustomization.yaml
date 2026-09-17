@@ -9,3 +9,4 @@ resources:
   - query-gateway-certificate.yaml
   - otel-gateway-certificate.yaml
   - opensearch-bootstrap-certificate.yaml
+  - opensearch-security-admin-certificate.yaml
