@@ -75,6 +75,12 @@ spec:
             - name: GF_SERVER_ROOT_URL
               value: http://localhost:3000
 
+            - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH
+              value: "contains(realm_access.roles[*], 'platform-admin') && 'Admin' || contains(realm_access.roles[*], 'tenant-admin') && 'Editor' || contains(realm_access.roles[*], 'viewer') && 'Viewer' || 'None'"
+
+            - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT
+              value: "true"
+
           ports:
             - name: http
               containerPort: 3000
