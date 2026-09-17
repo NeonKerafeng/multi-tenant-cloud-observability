@@ -71,6 +71,18 @@ spec:
                   name: opensearch-bootstrap
                   key: OPENSEARCH_INITIAL_ADMIN_PASSWORD
 
+            - name: plugins.security.ssl.http.enabled
+              value: "true"
+
+            - name: plugins.security.ssl.http.pemcert_filepath
+              value: certs/tls.crt
+
+            - name: plugins.security.ssl.http.pemkey_filepath
+              value: certs/tls.key
+
+            - name: plugins.security.ssl.http.pemtrustedcas_filepath
+              value: certs/ca.crt
+
           ports:
             - name: http
               containerPort: 9200
@@ -85,6 +97,10 @@ spec:
             - name: data
               mountPath: /usr/share/opensearch/data
 
+            - name: tls
+              mountPath: /usr/share/opensearch/config/certs
+              readOnly: true
+
           resources:
             requests:
               cpu: 300m
@@ -98,6 +114,11 @@ spec:
               port: http
             initialDelaySeconds: 20
             periodSeconds: 10
+
+      volumes:
+      - name: tls
+        secret:
+          secretName: opensearch-tls
 
       topologySpreadConstraints:
         - maxSkew: 1

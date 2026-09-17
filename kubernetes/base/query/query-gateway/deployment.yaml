@@ -36,6 +36,9 @@ spec:
             - name: OPENSEARCH_URL
               value: https://opensearch:9200
 
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/observability/ca/ca.crt
+
           readinessProbe:
             httpGet:
               path: /health
@@ -57,6 +60,19 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+
+          volumeMounts:
+          - name: opensearch-ca
+            mountPath: /etc/observability/ca
+            readOnly: true
+
+      volumes:
+        - name: opensearch-ca
+          secret:
+            secretName: opensearch-tls
+            items:
+              - key: ca.crt
+                path: ca.crt
 
       topologySpreadConstraints:
         - maxSkew: 1
