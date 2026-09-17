@@ -1,0 +1,26 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: observability-root-ca
+
+spec:
+  isCA: true
+  commonName: observability-root-ca
+  secretName: observability-root-ca
+
+  duration: 87600h
+  renewBefore: 8760h
+
+  privateKey:
+    algorithm: RSA
+    size: 4096
+    encoding: PKCS8
+
+  usages:
+    - digital signature
+    - cert sign
+    - crl sign
+
+  issuerRef:
+    name: observability-selfsigned
+    kind: Issuer

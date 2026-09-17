@@ -1,0 +1,39 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: opensearch-tls
+
+spec:
+  secretName: opensearch-tls
+  commonName: opensearch
+
+  duration: 2160h
+  renewBefore: 360h
+
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    encoding: PKCS8
+    rotationPolicy: Always
+
+  usages:
+    - server auth
+    - client auth
+
+  dnsNames:
+    - opensearch
+    - opensearch.observability
+    - opensearch.observability.svc
+    - opensearch.observability.svc.cluster.local
+
+    - opensearch-0.opensearch-headless
+    - opensearch-1.opensearch-headless
+    - opensearch-2.opensearch-headless
+
+    - opensearch-0.opensearch-headless.observability.svc.cluster.local
+    - opensearch-1.opensearch-headless.observability.svc.cluster.local
+    - opensearch-2.opensearch-headless.observability.svc.cluster.local
+
+  issuerRef:
+    name: observability-ca
+    kind: Issuer
