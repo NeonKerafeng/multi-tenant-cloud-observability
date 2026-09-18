@@ -12,6 +12,7 @@ export class HttpProxyService {
     prefix: string,
     req: Request,
     res: Response,
+    extraHeaders: Record<string, string> = {},
   ): Promise<void> {
     const downstreamPath = req.originalUrl.replace(prefix, '');
     const url = `${baseUrl}${downstreamPath}`;
@@ -21,7 +22,10 @@ export class HttpProxyService {
         method: req.method,
         url,
         data: req.body,
-        headers: this.forwardHeaders(req),
+        headers: {
+          ...this.forwardHeaders(req),
+          ...extraHeaders,
+        },
         responseType: 'arraybuffer',
         validateStatus: () => true,
       }),
@@ -30,6 +34,7 @@ export class HttpProxyService {
     res.status(response.status);
 
     const contentType = response.headers['content-type'];
+
     if (typeof contentType === 'string') {
       res.setHeader('content-type', contentType);
     }

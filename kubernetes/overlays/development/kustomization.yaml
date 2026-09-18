@@ -20,6 +20,10 @@ secretGenerator:
     envs:
       - opensearch-ingest.env
 
+  - name: opensearch-query
+    envs:
+      - opensearch-query.env
+
   - name: keycloak-db
     envs:
       - keycloak-db.env
@@ -39,7 +43,7 @@ secretGenerator:
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway
-    newTag: v0.1.1
+    newTag: v0.1.2
 
 patches:
   - path: patches/keycloak.yaml

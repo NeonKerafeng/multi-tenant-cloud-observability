@@ -16,13 +16,26 @@ export class OpenSearchController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const baseUrl = this.config.getOrThrow<string>('OPENSEARCH_URL');
+    const baseUrl =
+      this.config.getOrThrow<string>('OPENSEARCH_URL');
+
+    const username =
+      this.config.getOrThrow<string>('OPENSEARCH_USERNAME');
+
+    const password =
+      this.config.getOrThrow<string>('OPENSEARCH_PASSWORD');
+
+    const authorization =
+      `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 
     await this.proxy.forward(
       baseUrl,
       '/query/opensearch',
       req,
       res,
+      {
+        authorization,
+      },
     );
   }
 }

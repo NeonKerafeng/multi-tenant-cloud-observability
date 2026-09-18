@@ -19,7 +19,7 @@ spec:
       containers:
         - name: query-gateway
 
-          # Must be replaced by an image reachable from the Kubernetes cluster.
+          # Replaced by development/production overlay.
           image: query-gateway:latest
 
           ports:
@@ -36,14 +36,22 @@ spec:
             - name: OPENSEARCH_URL
               value: https://opensearch:9200
 
-            - name: OPENSEARCH_CA_FILE
+            # Add our project CA to Node.js trusted CAs.
+            - name: NODE_EXTRA_CA_CERTS
               value: /etc/observability/ca/ca.crt
 
-            - name: OPENSEARCH_CLIENT_CERT_FILE
-              value: /etc/observability/client-tls/tls.crt
+            # Query Gateway service identity for OpenSearch.
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-query
+                  key: username
 
-            - name: OPENSEARCH_CLIENT_KEY_FILE
-              value: /etc/observability/client-tls/tls.key
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-query
+                  key: password
 
           readinessProbe:
             httpGet:
@@ -68,13 +76,9 @@ spec:
               memory: 512Mi
 
           volumeMounts:
-          - name: opensearch-ca
-            mountPath: /etc/observability/ca
-            readOnly: true
-
-          - name: query-gateway-client-tls
-            mountPath: /etc/observability/client-tls
-            readOnly: true
+            - name: opensearch-ca
+              mountPath: /etc/observability/ca
+              readOnly: true
 
       volumes:
         - name: opensearch-ca
@@ -83,15 +87,6 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
-
-        - name: query-gateway-client-tls
-          secret:
-            secretName: query-gateway-tls
-            items:
-              - key: tls.crt
-                path: tls.crt
-              - key: tls.key
-                path: tls.key
 
       topologySpreadConstraints:
         - maxSkew: 1

@@ -28,12 +28,14 @@ spec:
               memory: 64Mi
 
           env:
+            # OpenSearch software/bootstrap administrator.
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: opensearch-bootstrap
                   key: OPENSEARCH_INITIAL_ADMIN_PASSWORD
 
+            # OTel Gateway service identity.
             - name: INGEST_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -46,20 +48,42 @@ spec:
                   name: opensearch-ingest
                   key: password
 
+            # Query Gateway service identity.
+            - name: QUERY_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-query
+                  key: username
+
+            - name: QUERY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-query
+                  key: password
+
+          volumeMounts:
+            - name: opensearch-ca
+              mountPath: /etc/observability/ca
+              readOnly: true
+
           command:
             - /bin/sh
             - -ec
             - |
+              CA=/etc/observability/ca/ca.crt
+              OPENSEARCH_URL=https://opensearch:9200
+
               echo "Waiting for OpenSearch..."
 
               MAX_ATTEMPTS=60
               ATTEMPT=1
 
-              until curl -kfsS \
+              until curl -fsS \
+                --cacert "$CA" \
                 --connect-timeout 3 \
                 --max-time 5 \
                 -u "admin:${ADMIN_PASSWORD}" \
-                https://opensearch:9200/_cluster/health \
+                "${OPENSEARCH_URL}/_cluster/health" \
                 >/dev/null;
               do
                 if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
@@ -72,15 +96,20 @@ spec:
                 sleep 5
               done
 
+              # ------------------------------------------------------------
+              # OTel ingest role
+              # ------------------------------------------------------------
+
               echo "Creating ingest role..."
 
-              curl -kfsS \
+              curl -fsS \
+                --cacert "$CA" \
                 --connect-timeout 3 \
                 --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
                 -H 'Content-Type: application/json' \
                 -X PUT \
-                https://opensearch:9200/_plugins/_security/api/roles/otel-ingest-role \
+                "${OPENSEARCH_URL}/_plugins/_security/api/roles/otel-ingest-role" \
                 -d '{
                   "cluster_permissions": [
                     "cluster_composite_ops"
@@ -106,13 +135,14 @@ spec:
 
               echo "Creating ingest user..."
 
-              curl -kfsS \
+              curl -fsS \
+                --cacert "$CA" \
                 --connect-timeout 3 \
                 --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
                 -H 'Content-Type: application/json' \
                 -X PUT \
-                "https://opensearch:9200/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
+                "${OPENSEARCH_URL}/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
                 -d "{
                   \"password\": \"${ESCAPED_INGEST_PASSWORD}\",
                   \"opendistro_security_roles\": [
@@ -120,22 +150,109 @@ spec:
                   ]
                 }"
 
-              echo "Verifying ingest role..."
+              # ------------------------------------------------------------
+              # Query Gateway role
+              # ------------------------------------------------------------
 
-              curl -kfsS \
+              echo "Creating query role..."
+
+              curl -fsS \
+                --cacert "$CA" \
                 --connect-timeout 3 \
                 --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
-                "https://opensearch:9200/_plugins/_security/api/roles/otel-ingest-role" \
+                -H 'Content-Type: application/json' \
+                -X PUT \
+                "${OPENSEARCH_URL}/_plugins/_security/api/roles/query-gateway-role" \
+                -d '{
+                  "cluster_permissions": [
+                    "cluster_composite_ops_ro"
+                  ],
+                  "index_permissions": [
+                    {
+                      "index_patterns": [
+                        "otel-logs*"
+                      ],
+                      "allowed_actions": [
+                        "read"
+                      ]
+                    }
+                  ],
+                  "tenant_permissions": []
+                }'
+
+              ESCAPED_QUERY_PASSWORD=$(
+                printf '%s' "$QUERY_PASSWORD" |
+                  sed 's/\\/\\\\/g; s/"/\\"/g'
+              )
+
+              echo "Creating query user..."
+
+              curl -fsS \
+                --cacert "$CA" \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                -H 'Content-Type: application/json' \
+                -X PUT \
+                "${OPENSEARCH_URL}/_plugins/_security/api/internalusers/${QUERY_USERNAME}" \
+                -d "{
+                  \"password\": \"${ESCAPED_QUERY_PASSWORD}\",
+                  \"opendistro_security_roles\": [
+                    \"query-gateway-role\"
+                  ]
+                }"
+
+              # ------------------------------------------------------------
+              # Verification
+              # ------------------------------------------------------------
+
+              echo "Verifying ingest role..."
+
+              curl -fsS \
+                --cacert "$CA" \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                "${OPENSEARCH_URL}/_plugins/_security/api/roles/otel-ingest-role" \
                 >/dev/null
 
               echo "Verifying ingest user..."
 
-              curl -kfsS \
+              curl -fsS \
+                --cacert "$CA" \
                 --connect-timeout 3 \
                 --max-time 10 \
                 -u "admin:${ADMIN_PASSWORD}" \
-                "https://opensearch:9200/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
+                "${OPENSEARCH_URL}/_plugins/_security/api/internalusers/${INGEST_USERNAME}" \
+                >/dev/null
+
+              echo "Verifying query role..."
+
+              curl -fsS \
+                --cacert "$CA" \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                "${OPENSEARCH_URL}/_plugins/_security/api/roles/query-gateway-role" \
+                >/dev/null
+
+              echo "Verifying query user..."
+
+              curl -fsS \
+                --cacert "$CA" \
+                --connect-timeout 3 \
+                --max-time 10 \
+                -u "admin:${ADMIN_PASSWORD}" \
+                "${OPENSEARCH_URL}/_plugins/_security/api/internalusers/${QUERY_USERNAME}" \
                 >/dev/null
 
               echo "OpenSearch bootstrap complete."
+
+      volumes:
+        - name: opensearch-ca
+          secret:
+            secretName: opensearch-tls
+            items:
+              - key: ca.crt
+                path: ca.crt
