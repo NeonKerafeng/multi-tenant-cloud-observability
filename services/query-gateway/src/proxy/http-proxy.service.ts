@@ -13,8 +13,12 @@ export class HttpProxyService {
     req: Request,
     res: Response,
     extraHeaders: Record<string, string> = {},
+    pathOverride?: string,
   ): Promise<void> {
-    const downstreamPath = req.originalUrl.replace(prefix, '');
+    const downstreamPath =
+      pathOverride ??
+      req.originalUrl.replace(prefix, '');
+
     const url = `${baseUrl}${downstreamPath}`;
 
     const response = await firstValueFrom(

@@ -53,6 +53,21 @@ spec:
                   name: opensearch-query
                   key: password
 
+            - name: KEYCLOAK_ISSUER
+              value: http://localhost:8080/realms/observability
+
+            - name: KEYCLOAK_JWKS_URI
+              value: http://keycloak:8080/realms/observability/protocol/openid-connect/certs
+
+            - name: KEYCLOAK_AUDIENCE
+              value: query-gateway
+
+            - name: TENANT_BACKENDS_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: tenant-backends
+                  key: tenants.json
+
           readinessProbe:
             httpGet:
               path: /health
