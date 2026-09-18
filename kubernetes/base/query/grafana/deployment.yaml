@@ -92,6 +92,10 @@ spec:
             - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT
               value: "true"
 
+            # Datasource plugins
+            - name: GF_PLUGINS_PREINSTALL
+              value: "grafana-opensearch-datasource@2.34.4"
+
           ports:
             - name: http
               containerPort: 3000
@@ -99,6 +103,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/grafana
+
+            - name: datasource-provisioning
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
 
           startupProbe:
             httpGet:
@@ -133,3 +141,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: grafana-data
+        - name: datasource-provisioning
+          configMap:
+            name: grafana-datasources

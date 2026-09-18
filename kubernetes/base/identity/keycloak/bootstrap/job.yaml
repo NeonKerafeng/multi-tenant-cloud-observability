@@ -118,6 +118,15 @@ spec:
                   -s serviceAccountsEnabled=false \
                   -s 'redirectUris=["http://localhost:3000/login/generic_oauth","http://127.0.0.1:3000/login/generic_oauth"]'
 
+                  GRAFANA_CLIENT_UUID=$(
+                    $KCADM get clients \
+                        -r "$REALM" \
+                        -q clientId="$GRAFANA_CLIENT_ID" \
+                        --fields id \
+                        --format csv \
+                        --noquotes
+                    )
+
               else
                 echo "Updating Grafana OIDC client..."
 
@@ -135,5 +144,138 @@ spec:
               fi
 
               echo "Grafana OIDC client ready."
+
+              echo "Ensuring Query Gateway OIDC client..."
+
+              QUERY_GATEWAY_CLIENT_ID=query-gateway
+
+              QUERY_GATEWAY_CLIENT_UUID=$(
+                $KCADM get clients \
+                  -r "$REALM" \
+                  -q clientId="$QUERY_GATEWAY_CLIENT_ID" \
+                  --fields id \
+                  --format csv \
+                  --noquotes
+              )
+
+              if [ -z "$QUERY_GATEWAY_CLIENT_UUID" ]; then
+                echo "Creating Query Gateway OIDC client..."
+
+                $KCADM create clients \
+                  -r "$REALM" \
+                  -s "clientId=$QUERY_GATEWAY_CLIENT_ID" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s bearerOnly=true \
+                  -s publicClient=false \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false
+
+              else
+                echo "Updating Query Gateway OIDC client..."
+
+                $KCADM update "clients/$QUERY_GATEWAY_CLIENT_UUID" \
+                  -r "$REALM" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s bearerOnly=true \
+                  -s publicClient=false \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false
+              fi
+
+              echo "Query Gateway OIDC client ready."
+
+              echo "Ensuring Query Gateway audience mapper..."
+
+              AUDIENCE_MAPPER_NAME=query-gateway-audience
+
+              AUDIENCE_MAPPER_ID=$(
+                $KCADM get \
+                  "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                  -r "$REALM" \
+                  --fields id,name \
+                  --format csv \
+                  --noquotes |
+                while IFS=, read -r ID NAME; do
+                  if [ "$NAME" = "$AUDIENCE_MAPPER_NAME" ]; then
+                    printf '%s\n' "$ID"
+                    break
+                  fi
+                done
+              )
+
+              AUDIENCE_MAPPER_JSON=$(
+                printf '%s' \
+                  "{\"name\":\"$AUDIENCE_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-audience-mapper\",\"consentRequired\":false,\"config\":{\"included.client.audience\":\"query-gateway\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"introspection.token.claim\":\"true\"}}"
+              )
+
+              if [ -z "$AUDIENCE_MAPPER_ID" ]; then
+                echo "Creating Query Gateway audience mapper..."
+
+                printf '%s\n' "$AUDIENCE_MAPPER_JSON" |
+                  $KCADM create \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                    -r "$REALM" \
+                    -f -
+
+              else
+                echo "Updating Query Gateway audience mapper..."
+
+                printf '%s\n' "$AUDIENCE_MAPPER_JSON" |
+                  $KCADM update \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models/$AUDIENCE_MAPPER_ID" \
+                    -r "$REALM" \
+                    -f -
+              fi
+
+              echo "Query Gateway audience mapper ready."
+
+              echo "Ensuring tenant groups mapper..."
+
+              GROUPS_MAPPER_NAME=tenant-groups
+
+              GROUPS_MAPPER_ID=$(
+                $KCADM get \
+                  "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                  -r "$REALM" \
+                  --fields id,name \
+                  --format csv \
+                  --noquotes |
+                while IFS=, read -r ID NAME; do
+                  if [ "$NAME" = "$GROUPS_MAPPER_NAME" ]; then
+                    printf '%s\n' "$ID"
+                    break
+                  fi
+                done
+              )
+
+              GROUPS_MAPPER_JSON=$(
+                printf '%s' \
+                  "{\"name\":\"$GROUPS_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-group-membership-mapper\",\"consentRequired\":false,\"config\":{\"claim.name\":\"groups\",\"full.path\":\"false\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"userinfo.token.claim\":\"false\",\"introspection.token.claim\":\"true\"}}"
+              )
+
+              if [ -z "$GROUPS_MAPPER_ID" ]; then
+                echo "Creating tenant groups mapper..."
+
+                printf '%s\n' "$GROUPS_MAPPER_JSON" |
+                  $KCADM create \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                    -r "$REALM" \
+                    -f -
+
+              else
+                echo "Updating tenant groups mapper..."
+
+                printf '%s\n' "$GROUPS_MAPPER_JSON" |
+                  $KCADM update \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models/$GROUPS_MAPPER_ID" \
+                    -r "$REALM" \
+                    -f -
+              fi
+
+              echo "Tenant groups mapper ready."
 
               echo "Keycloak bootstrap complete."

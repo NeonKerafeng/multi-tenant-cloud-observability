@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      # Logs
+      - name: OpenSearch
+        uid: opensearch
+        type: grafana-opensearch-datasource
+        access: proxy
+        url: http://query-gateway:8080/query/opensearch
+        database: otel-logs*
+        editable: true
+
+        jsonData:
+          timeField: "@timestamp"
+          oauthPassThru: true
+
+      # Metrics
+      - name: VictoriaMetrics
+        uid: victoriametrics
+        type: prometheus
+        access: proxy
+        url: http://query-gateway:8080/query/victoriametrics
+        editable: true
+
+        jsonData:
+          oauthPassThru: true
