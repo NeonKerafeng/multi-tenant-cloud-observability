@@ -71,6 +71,11 @@ spec:
                 sleep 5
               done
 
+
+              # ========================================
+              # Realm
+              # ========================================
+
               if ! $KCADM get "realms/$REALM" >/dev/null 2>&1; then
                 echo "Creating realm: $REALM"
 
@@ -78,6 +83,11 @@ spec:
                   -s realm="$REALM" \
                   -s enabled=true
               fi
+
+
+              # ========================================
+              # Realm roles
+              # ========================================
 
               for ROLE in platform-admin tenant-admin viewer; do
                 if ! $KCADM get "roles/$ROLE" \
@@ -90,6 +100,11 @@ spec:
                     -s name="$ROLE"
                 fi
               done
+
+
+              # ========================================
+              # Grafana OIDC client
+              # ========================================
 
               echo "Ensuring Grafana OIDC client..."
 
@@ -118,14 +133,14 @@ spec:
                   -s serviceAccountsEnabled=false \
                   -s 'redirectUris=["http://localhost:3000/login/generic_oauth","http://127.0.0.1:3000/login/generic_oauth"]'
 
-                  GRAFANA_CLIENT_UUID=$(
-                    $KCADM get clients \
-                        -r "$REALM" \
-                        -q clientId="$GRAFANA_CLIENT_ID" \
-                        --fields id \
-                        --format csv \
-                        --noquotes
-                    )
+                GRAFANA_CLIENT_UUID=$(
+                  $KCADM get clients \
+                    -r "$REALM" \
+                    -q clientId="$GRAFANA_CLIENT_ID" \
+                    --fields id \
+                    --format csv \
+                    --noquotes
+                )
 
               else
                 echo "Updating Grafana OIDC client..."
@@ -144,6 +159,11 @@ spec:
               fi
 
               echo "Grafana OIDC client ready."
+
+
+              # ========================================
+              # Query Gateway OIDC client
+              # ========================================
 
               echo "Ensuring Query Gateway OIDC client..."
 
@@ -188,6 +208,11 @@ spec:
 
               echo "Query Gateway OIDC client ready."
 
+
+              # ========================================
+              # Query Gateway audience mapper
+              # ========================================
+
               echo "Ensuring Query Gateway audience mapper..."
 
               AUDIENCE_MAPPER_NAME=query-gateway-audience
@@ -224,7 +249,12 @@ spec:
               else
                 echo "Updating Query Gateway audience mapper..."
 
-                printf '%s\n' "$AUDIENCE_MAPPER_JSON" |
+                AUDIENCE_MAPPER_UPDATE_JSON=$(
+                  printf '%s' \
+                    "{\"id\":\"$AUDIENCE_MAPPER_ID\",\"name\":\"$AUDIENCE_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-audience-mapper\",\"consentRequired\":false,\"config\":{\"included.client.audience\":\"query-gateway\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"introspection.token.claim\":\"true\"}}"
+                )
+
+                printf '%s\n' "$AUDIENCE_MAPPER_UPDATE_JSON" |
                   $KCADM update \
                     "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models/$AUDIENCE_MAPPER_ID" \
                     -r "$REALM" \
@@ -232,6 +262,11 @@ spec:
               fi
 
               echo "Query Gateway audience mapper ready."
+
+
+              # ========================================
+              # Tenant groups mapper
+              # ========================================
 
               echo "Ensuring tenant groups mapper..."
 
@@ -269,7 +304,12 @@ spec:
               else
                 echo "Updating tenant groups mapper..."
 
-                printf '%s\n' "$GROUPS_MAPPER_JSON" |
+                GROUPS_MAPPER_UPDATE_JSON=$(
+                  printf '%s' \
+                    "{\"id\":\"$GROUPS_MAPPER_ID\",\"name\":\"$GROUPS_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-group-membership-mapper\",\"consentRequired\":false,\"config\":{\"claim.name\":\"groups\",\"full.path\":\"false\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"userinfo.token.claim\":\"false\",\"introspection.token.claim\":\"true\"}}"
+                )
+
+                printf '%s\n' "$GROUPS_MAPPER_UPDATE_JSON" |
                   $KCADM update \
                     "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models/$GROUPS_MAPPER_ID" \
                     -r "$REALM" \
@@ -277,5 +317,176 @@ spec:
               fi
 
               echo "Tenant groups mapper ready."
+
+
+              # ========================================
+              # VictoriaMetrics account ID mapper
+              # ========================================
+
+              echo "Ensuring VictoriaMetrics account ID mapper..."
+
+              VM_ACCOUNT_MAPPER_NAME=vm-account-id
+
+              VM_ACCOUNT_MAPPER_ID=$(
+                $KCADM get \
+                  "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                  -r "$REALM" \
+                  --fields id,name \
+                  --format csv \
+                  --noquotes |
+                while IFS=, read -r ID NAME; do
+                  if [ "$NAME" = "$VM_ACCOUNT_MAPPER_NAME" ]; then
+                    printf '%s\n' "$ID"
+                    break
+                  fi
+                done
+              )
+
+              VM_ACCOUNT_MAPPER_JSON=$(
+                printf '%s' \
+                  "{\"name\":\"$VM_ACCOUNT_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-usermodel-attribute-mapper\",\"consentRequired\":false,\"config\":{\"user.attribute\":\"vm_account_id\",\"claim.name\":\"vm_account_id\",\"jsonType.label\":\"String\",\"multivalued\":\"true\",\"aggregate.attrs\":\"true\",\"id.token.claim\":\"true\",\"access.token.claim\":\"true\",\"userinfo.token.claim\":\"true\",\"introspection.token.claim\":\"true\"}}"
+              )
+
+              if [ -z "$VM_ACCOUNT_MAPPER_ID" ]; then
+                echo "Creating VictoriaMetrics account ID mapper..."
+
+                printf '%s\n' "$VM_ACCOUNT_MAPPER_JSON" |
+                  $KCADM create \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models" \
+                    -r "$REALM" \
+                    -f -
+
+              else
+                echo "Updating VictoriaMetrics account ID mapper..."
+
+                VM_ACCOUNT_MAPPER_UPDATE_JSON=$(
+                  printf '%s' \
+                    "{\"id\":\"$VM_ACCOUNT_MAPPER_ID\",\"name\":\"$VM_ACCOUNT_MAPPER_NAME\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-usermodel-attribute-mapper\",\"consentRequired\":false,\"config\":{\"user.attribute\":\"vm_account_id\",\"claim.name\":\"vm_account_id\",\"jsonType.label\":\"String\",\"multivalued\":\"true\",\"aggregate.attrs\":\"true\",\"id.token.claim\":\"true\",\"access.token.claim\":\"true\",\"userinfo.token.claim\":\"true\",\"introspection.token.claim\":\"true\"}}"
+                )
+
+                printf '%s\n' "$VM_ACCOUNT_MAPPER_UPDATE_JSON" |
+                  $KCADM update \
+                    "clients/$GRAFANA_CLIENT_UUID/protocol-mappers/models/$VM_ACCOUNT_MAPPER_ID" \
+                    -r "$REALM" \
+                    -f -
+              fi
+
+              echo "VictoriaMetrics account ID mapper ready."
+
+              # ========================================
+              # VictoriaMetrics tenant account IDs
+              # ========================================
+
+              echo "Ensuring VictoriaMetrics account IDs for tenant groups..."
+
+              GROUP_ROWS=$(
+                $KCADM get groups \
+                  -r "$REALM" \
+                  --fields id,name \
+                  --format csv \
+                  --noquotes
+              )
+
+              USED_VM_ACCOUNT_IDS=""
+
+              while IFS=, read -r GROUP_ID GROUP_NAME; do
+                [ -n "$GROUP_ID" ] || continue
+
+                GROUP_JSON=$(
+                  $KCADM get "groups/$GROUP_ID" \
+                    -r "$REALM"
+                )
+
+                VM_ACCOUNT_ID=$(
+                  printf '%s' "$GROUP_JSON" |
+                    sed -n \
+                      's/.*"vm_account_id"[[:space:]]*:[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p'
+                )
+
+                if [ -n "$VM_ACCOUNT_ID" ]; then
+                  USED_VM_ACCOUNT_IDS="$USED_VM_ACCOUNT_IDS $VM_ACCOUNT_ID"
+                fi
+              done <<EOF
+              $GROUP_ROWS
+              EOF
+
+
+              NEXT_VM_ACCOUNT_ID=1
+
+              while :; do
+                FOUND=false
+
+                for USED_ID in $USED_VM_ACCOUNT_IDS; do
+                  if [ "$USED_ID" = "$NEXT_VM_ACCOUNT_ID" ]; then
+                    FOUND=true
+                    break
+                  fi
+                done
+
+                if [ "$FOUND" = false ]; then
+                  break
+                fi
+
+                NEXT_VM_ACCOUNT_ID=$((NEXT_VM_ACCOUNT_ID + 1))
+              done
+
+
+              while IFS=, read -r GROUP_ID GROUP_NAME; do
+                [ -n "$GROUP_ID" ] || continue
+
+                GROUP_JSON=$(
+                  $KCADM get "groups/$GROUP_ID" \
+                    -r "$REALM"
+                )
+
+                VM_ACCOUNT_ID=$(
+                  printf '%s' "$GROUP_JSON" |
+                    sed -n \
+                      's/.*"vm_account_id"[[:space:]]*:[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p'
+                )
+
+                if [ -n "$VM_ACCOUNT_ID" ]; then
+                  echo \
+                    "Tenant group $GROUP_NAME already has vm_account_id=$VM_ACCOUNT_ID"
+
+                  continue
+                fi
+
+                while :; do
+                  FOUND=false
+
+                  for USED_ID in $USED_VM_ACCOUNT_IDS; do
+                    if [ "$USED_ID" = "$NEXT_VM_ACCOUNT_ID" ]; then
+                      FOUND=true
+                      break
+                    fi
+                  done
+
+                  if [ "$FOUND" = false ]; then
+                    break
+                  fi
+
+                  NEXT_VM_ACCOUNT_ID=$((NEXT_VM_ACCOUNT_ID + 1))
+                done
+
+                echo \
+                  "Assigning vm_account_id=$NEXT_VM_ACCOUNT_ID to tenant group $GROUP_NAME"
+
+                $KCADM update "groups/$GROUP_ID" \
+                  -r "$REALM" \
+                  -s "attributes.vm_account_id=[\"$NEXT_VM_ACCOUNT_ID\"]"
+
+                USED_VM_ACCOUNT_IDS="$USED_VM_ACCOUNT_IDS $NEXT_VM_ACCOUNT_ID"
+
+                NEXT_VM_ACCOUNT_ID=$((NEXT_VM_ACCOUNT_ID + 1))
+              done <<EOF
+              $GROUP_ROWS
+              EOF
+
+              echo "VictoriaMetrics account IDs ready."
+
+              # ========================================
+              # Done
+              # ========================================
 
               echo "Keycloak bootstrap complete."
