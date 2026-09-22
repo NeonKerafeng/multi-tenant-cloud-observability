@@ -1,19 +1,12 @@
-import {
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 
 import type { AuthUser } from '../auth/auth-user';
 import type { TenantContext } from './tenant-context';
 
 @Injectable()
 export class TenantService {
-  resolve(
-    user: AuthUser,
-    requestedTenant?: string,
-  ): TenantContext {
-    const platformAdmin =
-      user.roles.includes('platform-admin');
+  resolve(user: AuthUser, requestedTenant?: string): TenantContext {
+    const platformAdmin = user.roles.includes('platform-admin');
 
     if (platformAdmin) {
       return {
@@ -23,13 +16,10 @@ export class TenantService {
     }
 
     const allowedRole =
-      user.roles.includes('viewer') ||
-      user.roles.includes('tenant-admin');
+      user.roles.includes('viewer') || user.roles.includes('tenant-admin');
 
     if (!allowedRole) {
-      throw new ForbiddenException(
-        'User has no observability role',
-      );
+      throw new ForbiddenException('User has no observability role');
     }
 
     const groups = user.groups

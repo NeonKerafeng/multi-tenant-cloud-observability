@@ -1,26 +1,16 @@
 import { NestFactory } from '@nestjs/core';
-import {
-  json,
-  raw,
-  urlencoded,
-} from 'express';
+import { json, raw, urlencoded } from 'express';
 
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(
-    AppModule,
-    {
-      bodyParser: false,
-    },
-  );
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
+  });
 
   app.use(
     raw({
-      type: [
-        'application/x-ndjson',
-        'application/ndjson',
-      ],
+      type: ['application/x-ndjson', 'application/ndjson'],
       limit: '5mb',
     }),
   );
@@ -38,10 +28,7 @@ async function bootstrap() {
     }),
   );
 
-  await app.listen(
-    process.env.PORT ?? 8080,
-    '0.0.0.0',
-  );
+  await app.listen(process.env.PORT ?? 8080, '0.0.0.0');
 }
 
 bootstrap();

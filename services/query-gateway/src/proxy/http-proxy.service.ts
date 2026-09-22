@@ -15,9 +15,7 @@ export class HttpProxyService {
     extraHeaders: Record<string, string> = {},
     pathOverride?: string,
   ): Promise<void> {
-    const downstreamPath =
-      pathOverride ??
-      req.originalUrl.replace(prefix, '');
+    const downstreamPath = pathOverride ?? req.originalUrl.replace(prefix, '');
 
     const url = `${baseUrl}${downstreamPath}`;
 

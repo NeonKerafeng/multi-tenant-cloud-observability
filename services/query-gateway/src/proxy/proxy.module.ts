@@ -9,19 +9,10 @@ import { VictoriaMetricsController } from './victoriametrics.controller';
 import { OpenSearchController } from './opensearch.controller';
 
 @Module({
-  imports: [
-    HttpModule,
-    TenantModule,
-  ],
+  imports: [HttpModule, TenantModule],
 
-  controllers: [
-    VictoriaMetricsController,
-    OpenSearchController,
-  ],
+  controllers: [VictoriaMetricsController, OpenSearchController],
 
-  providers: [
-    HttpProxyService,
-    OpenSearchTenantService,
-  ],
+  providers: [HttpProxyService, OpenSearchTenantService],
 })
 export class ProxyModule {}
