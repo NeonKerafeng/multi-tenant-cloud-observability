@@ -8,6 +8,7 @@ import type { AuthUser } from './auth-user';
 
 interface KeycloakPayload {
   sub: string;
+
   preferred_username?: string;
 
   realm_access?: {
@@ -15,6 +16,8 @@ interface KeycloakPayload {
   };
 
   groups?: string[];
+
+  vm_account_id?: string | string[];
 }
 
 @Injectable()
@@ -38,11 +41,31 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   validate(payload: KeycloakPayload): AuthUser {
+    const rawVmAccountId = payload.vm_account_id;
+
+    const vmAccountIds =
+      rawVmAccountId === undefined
+        ? []
+        : Array.isArray(rawVmAccountId)
+          ? rawVmAccountId
+          : [rawVmAccountId];
+
     return {
       sub: payload.sub,
-      username: payload.preferred_username ?? payload.sub,
-      roles: payload.realm_access?.roles ?? [],
-      groups: payload.groups ?? [],
+
+      username:
+        payload.preferred_username ??
+        payload.sub,
+
+      roles:
+        payload.realm_access?.roles ??
+        [],
+
+      groups:
+        payload.groups ??
+        [],
+
+      vmAccountIds,
     };
   }
 }

@@ -3,4 +3,5 @@ export interface AuthUser {
   username: string;
   roles: string[];
   groups: string[];
+  vmAccountIds: string[];
 }
