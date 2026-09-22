@@ -14,10 +14,12 @@ data:
         type: grafana-opensearch-datasource
         access: proxy
         url: http://query-gateway:8080/query/opensearch
-        database: otel-logs*
         editable: true
 
         jsonData:
+          flavor: opensearch
+          version: "3.8.0"
+          database: "otel-logs*"
           timeField: "@timestamp"
           oauthPassThru: true
 
