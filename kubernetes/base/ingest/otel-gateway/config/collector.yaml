@@ -3,12 +3,28 @@ receivers:
     protocols:
       http:
         endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: oidc/agent
 
 processors:
   memory_limiter:
     check_interval: 1s
     limit_mib: 400
     spike_limit_mib: 100
+
+  resource/tenant:
+    attributes:
+      - key: tenant.id
+        from_context: auth.claims.tenant_id
+        action: upsert
+
+      - key: agent.id
+        from_context: auth.claims.agent_id
+        action: upsert
+
+      - key: vm.account.id
+        from_context: auth.claims.vm_account_id
+        action: upsert
 
   batch:
 
@@ -17,6 +33,12 @@ extensions:
     client_auth:
       username: ${env:OPENSEARCH_USERNAME}
       password: ${env:OPENSEARCH_PASSWORD}
+
+  oidc/agent:
+    providers:
+      - issuer_url: http://localhost:8080/realms/observability
+        audience: otel-gateway
+        public_keys_file: /etc/otel/jwks/jwks.json
 
 exporters:
   prometheusremotewrite/victoriametrics:
@@ -35,6 +57,7 @@ exporters:
 service:
   extensions:
     - basicauth/opensearch
+    - oidc/agent
 
   pipelines:
     metrics:
@@ -44,5 +67,5 @@ service:
 
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/tenant, batch]
       exporters: [opensearch]

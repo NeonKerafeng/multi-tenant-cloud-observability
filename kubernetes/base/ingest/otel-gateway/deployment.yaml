@@ -16,6 +16,29 @@ spec:
         app: otel-gateway
 
     spec:
+      initContainers:
+        - name: fetch-keycloak-jwks
+          image: busybox:1.37.0
+
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Fetching Keycloak JWKS..."
+
+              until wget -qO /jwks/jwks.json \
+                http://keycloak:8080/realms/observability/protocol/openid-connect/certs;
+              do
+                echo "Keycloak JWKS not ready yet..."
+                sleep 2
+              done
+
+              echo "Keycloak JWKS ready."
+
+          volumeMounts:
+            - name: keycloak-jwks
+              mountPath: /jwks
+
       containers:
         - name: otel-gateway
           image: otel/opentelemetry-collector-contrib:0.160.0
@@ -46,6 +69,10 @@ spec:
               subPath: config.yaml
               readOnly: true
 
+            - name: keycloak-jwks
+              mountPath: /etc/otel/jwks
+              readOnly: true
+
           resources:
             requests:
               cpu: 100m
@@ -58,6 +85,9 @@ spec:
         - name: config
           configMap:
             name: otel-gateway-config
+
+        - name: keycloak-jwks
+          emptyDir: {}
 
       topologySpreadConstraints:
         - maxSkew: 1
