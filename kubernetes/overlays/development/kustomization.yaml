@@ -10,6 +10,7 @@ resources:
   - ../../base/ingest/otel-gateway
   - ../../base/identity/keycloak
   - ../../base/query
+  - ../../base/control/control-plane
 
 secretGenerator:
   - name: opensearch-bootstrap
@@ -48,6 +49,10 @@ images:
   - name: query-gateway
     newName: kerafeng/query-gateway
     newTag: v0.1.10-e2e
+
+  - name: control-plane
+    newName: kerafeng/control-plane
+    newTag: v0.1.0
 
 patches:
   - path: patches/keycloak.yaml

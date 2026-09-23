@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: control-plane
+
+  template:
+    metadata:
+      labels:
+        app: control-plane
+
+    spec:
+      containers:
+        - name: control-plane
+
+          # Replaced by development/production overlay.
+          image: control-plane:latest
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          env:
+            - name: PORT
+              value: "8080"
+
+            # Human JWT verification.
+            - name: KEYCLOAK_ISSUER
+              value: http://localhost:8080/realms/observability
+
+            - name: KEYCLOAK_JWKS_URI
+              value: http://keycloak:8080/realms/observability/protocol/openid-connect/certs
+
+            - name: KEYCLOAK_AUDIENCE
+              value: control-plane
+
+            # Control Plane -> Keycloak Admin API.
+            - name: KEYCLOAK_URL
+              value: http://keycloak:8080
+
+            - name: KEYCLOAK_REALM
+              value: observability
+
+            - name: KEYCLOAK_ADMIN_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-keycloak
+                  key: client_id
+
+            - name: KEYCLOAK_ADMIN_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-keycloak
+                  key: client_secret
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512M
