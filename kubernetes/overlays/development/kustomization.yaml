@@ -40,6 +40,10 @@ secretGenerator:
     envs:
       - grafana-oidc.env
 
+  - name: control-plane-keycloak
+    envs:
+      - control-plane-keycloak.env
+
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway

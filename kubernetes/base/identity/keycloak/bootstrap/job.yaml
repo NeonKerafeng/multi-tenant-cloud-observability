@@ -52,6 +52,18 @@ spec:
                   name: grafana-oidc
                   key: client_secret
 
+            - name: CONTROL_PLANE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-keycloak
+                  key: client_id
+
+            - name: CONTROL_PLANE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-keycloak
+                  key: client_secret
+
           command:
             - /bin/sh
             - -ec
@@ -537,8 +549,6 @@ spec:
 
               echo "Ensuring Control Plane Admin client..."
 
-              CONTROL_PLANE_CLIENT_ID=control-plane-admin
-
               CONTROL_PLANE_CLIENT_UUID=$(
                 $KCADM get clients \
                   -r "$REALM" \
@@ -554,6 +564,7 @@ spec:
                 $KCADM create clients \
                   -r "$REALM" \
                   -s "clientId=$CONTROL_PLANE_CLIENT_ID" \
+                  -s "secret=$CONTROL_PLANE_CLIENT_SECRET" \
                   -s enabled=true \
                   -s protocol=openid-connect \
                   -s publicClient=false \
@@ -576,6 +587,7 @@ spec:
 
                 $KCADM update "clients/$CONTROL_PLANE_CLIENT_UUID" \
                   -r "$REALM" \
+                  -s "secret=$CONTROL_PLANE_CLIENT_SECRET" \
                   -s enabled=true \
                   -s protocol=openid-connect \
                   -s publicClient=false \
