@@ -532,6 +532,78 @@ spec:
               echo "VictoriaMetrics account IDs ready."
 
               # ========================================
+              # Control Plane Admin client
+              # ========================================
+
+              echo "Ensuring Control Plane Admin client..."
+
+              CONTROL_PLANE_CLIENT_ID=control-plane-admin
+
+              CONTROL_PLANE_CLIENT_UUID=$(
+                $KCADM get clients \
+                  -r "$REALM" \
+                  -q clientId="$CONTROL_PLANE_CLIENT_ID" \
+                  --fields id \
+                  --format csv \
+                  --noquotes
+              )
+
+              if [ -z "$CONTROL_PLANE_CLIENT_UUID" ]; then
+                echo "Creating Control Plane Admin client..."
+
+                $KCADM create clients \
+                  -r "$REALM" \
+                  -s "clientId=$CONTROL_PLANE_CLIENT_ID" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s publicClient=false \
+                  -s clientAuthenticatorType=client-secret \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=true
+
+                CONTROL_PLANE_CLIENT_UUID=$(
+                  $KCADM get clients \
+                    -r "$REALM" \
+                    -q clientId="$CONTROL_PLANE_CLIENT_ID" \
+                    --fields id \
+                    --format csv \
+                    --noquotes
+                )
+
+              else
+                echo "Updating Control Plane Admin client..."
+
+                $KCADM update "clients/$CONTROL_PLANE_CLIENT_UUID" \
+                  -r "$REALM" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s publicClient=false \
+                  -s clientAuthenticatorType=client-secret \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=true
+              fi
+
+              echo "Assigning Control Plane Admin permissions..."
+
+              SERVICE_ACCOUNT_USERNAME="service-account-$CONTROL_PLANE_CLIENT_ID"
+
+              $KCADM add-roles \
+                -r "$REALM" \
+                --uusername "$SERVICE_ACCOUNT_USERNAME" \
+                --cclientid realm-management \
+                --rolename manage-clients
+
+              $KCADM add-roles \
+                -r "$REALM" \
+                --uusername "$SERVICE_ACCOUNT_USERNAME" \
+                --cclientid realm-management \
+                --rolename manage-users
+
+              echo "Control Plane Admin client ready."
+
+              # ========================================
               # Done
               # ========================================
 
