@@ -208,6 +208,52 @@ spec:
 
               echo "Query Gateway OIDC client ready."
 
+              # ========================================
+              # OTel Gateway OIDC client
+              # ========================================
+
+              echo "Ensuring OTel Gateway OIDC client..."
+
+              OTEL_GATEWAY_CLIENT_ID=otel-gateway
+
+              OTEL_GATEWAY_CLIENT_UUID=$(
+                $KCADM get clients \
+                  -r "$REALM" \
+                  -q clientId="$OTEL_GATEWAY_CLIENT_ID" \
+                  --fields id \
+                  --format csv \
+                  --noquotes
+              )
+
+              if [ -z "$OTEL_GATEWAY_CLIENT_UUID" ]; then
+                echo "Creating OTel Gateway OIDC client..."
+
+                $KCADM create clients \
+                  -r "$REALM" \
+                  -s "clientId=$OTEL_GATEWAY_CLIENT_ID" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s bearerOnly=true \
+                  -s publicClient=false \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false
+
+              else
+                echo "Updating OTel Gateway OIDC client..."
+
+                $KCADM update "clients/$OTEL_GATEWAY_CLIENT_UUID" \
+                  -r "$REALM" \
+                  -s enabled=true \
+                  -s protocol=openid-connect \
+                  -s bearerOnly=true \
+                  -s publicClient=false \
+                  -s standardFlowEnabled=false \
+                  -s directAccessGrantsEnabled=false \
+                  -s serviceAccountsEnabled=false
+              fi
+
+              echo "OTel Gateway OIDC client ready."
 
               # ========================================
               # Query Gateway audience mapper
