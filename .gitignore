@@ -21,3 +21,5 @@ kubernetes/overlays/development/keycloak-admin.env
 kubernetes/overlays/development/grafana-admin.env
 kubernetes/overlays/development/grafana-oidc.env
 kubernetes/overlays/development/*.env
+
+client/otel/agent.env
