@@ -40,9 +40,17 @@ extensions:
         audience: otel-gateway
         public_keys_file: /etc/otel/jwks/jwks.json
 
+  headers_setter/victoriametrics:
+    headers:
+      - key: AccountID
+        from_attribute: claims.vm_account_id
+        action: upsert
+
 exporters:
   prometheusremotewrite/victoriametrics:
-    endpoint: http://vminsert:8480/insert/0/prometheus/api/v1/write
+    endpoint: http://vminsert:8480/insert/prometheus/api/v1/write
+    auth:
+      authenticator: headers_setter/victoriametrics
 
   opensearch:
     http:
@@ -58,11 +66,12 @@ service:
   extensions:
     - basicauth/opensearch
     - oidc/agent
+    - headers_setter/victoriametrics
 
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/tenant]
       exporters: [prometheusremotewrite/victoriametrics]
 
     logs:
