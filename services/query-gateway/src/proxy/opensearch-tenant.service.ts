@@ -73,7 +73,7 @@ export class OpenSearchTenantService {
           filter: [
             {
               term: {
-                'tenant.id.keyword': tenantId,
+                'resource.tenant.id.keyword': tenantId,
               },
             },
           ],

@@ -45,6 +45,11 @@ secretGenerator:
     envs:
       - control-plane-keycloak.env
 
+configMapGenerator:
+  - name: platform-endpoints
+    envs:
+      - platform.env
+
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway
