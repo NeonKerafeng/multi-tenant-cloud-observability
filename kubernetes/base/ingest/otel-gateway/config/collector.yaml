@@ -36,7 +36,7 @@ extensions:
 
   oidc/agent:
     providers:
-      - issuer_url: http://localhost:8080/realms/observability
+      - issuer_url: ${env:KEYCLOAK_ISSUER}
         audience: otel-gateway
         public_keys_file: /etc/otel/jwks/jwks.json
 

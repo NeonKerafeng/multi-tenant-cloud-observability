@@ -59,6 +59,12 @@ spec:
                   name: opensearch-ingest
                   key: password
 
+            - name: KEYCLOAK_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-endpoints
+                  key: KEYCLOAK_ISSUER
+
           ports:
             - name: otlp-http
               containerPort: 4318
