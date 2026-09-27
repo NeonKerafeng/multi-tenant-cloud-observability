@@ -17,6 +17,27 @@ export interface AgentIdentity {
   clientId: string;
   clientSecret: string;
 }
+
+export interface ManagedAgentIdentity {
+  agentId: string;
+  clientId: string;
+  tenantId: string;
+  vmAccountId: string;
+  enabled: boolean;
+}
+
+type KeycloakClientRepresentation =
+  Record<string, unknown> & {
+    id: string;
+    clientId: string;
+    enabled?: boolean;
+  };
+
+type KeycloakUserRepresentation = {
+  id: string;
+  attributes?: Record<string, string[]>;
+};
+
 @Injectable()
 export class KeycloakAdminService {
   constructor(private readonly config: ConfigService) {}
@@ -237,6 +258,254 @@ export class KeycloakAdminService {
     return {
       clientId,
       clientSecret: secret.value,
+    };
+  }
+
+  async listAgentIdentities(): Promise<ManagedAgentIdentity[]> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/clients?first=0&max=1000`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to list Keycloak clients: ${response.status}`,
+      );
+    }
+
+    const clients =
+      (await response.json()) as KeycloakClientRepresentation[];
+
+    const agentClients = clients.filter((client) =>
+      client.clientId.startsWith('otel-agent-'),
+    );
+
+    const agents: ManagedAgentIdentity[] = [];
+
+    for (const client of agentClients) {
+      const agent =
+        await this.toManagedAgentIdentity(client, token);
+
+      if (agent) {
+        agents.push(agent);
+      }
+    }
+
+    return agents;
+  }
+
+  async getAgentIdentity(
+    agentId: string,
+  ): Promise<ManagedAgentIdentity | null> {
+    const token = await this.getAdminAccessToken();
+
+    const client =
+      await this.findAgentClient(agentId, token);
+
+    if (!client) {
+      return null;
+    }
+
+    return this.toManagedAgentIdentity(client, token);
+  }
+
+  async setAgentEnabled(
+    agentId: string,
+    enabled: boolean,
+  ): Promise<ManagedAgentIdentity | null> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const client =
+      await this.findAgentClient(agentId, token);
+
+    if (!client) {
+      return null;
+    }
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/clients/${client.id}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...client,
+          enabled,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to update agent client: ${response.status}`,
+      );
+    }
+
+    return this.toManagedAgentIdentity(
+      {
+        ...client,
+        enabled,
+      },
+      token,
+    );
+  }
+
+  async deleteAgentIdentity(
+    agentId: string,
+  ): Promise<boolean> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const client =
+      await this.findAgentClient(agentId, token);
+
+    if (!client) {
+      return false;
+    }
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/clients/${client.id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to delete agent client: ${response.status}`,
+      );
+    }
+
+    return true;
+  }
+
+  private async findAgentClient(
+    agentId: string,
+    token: string,
+  ): Promise<KeycloakClientRepresentation | null> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const clientId = `otel-agent-${agentId}`;
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/clients?clientId=${encodeURIComponent(clientId)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to find agent client: ${response.status}`,
+      );
+    }
+
+    const clients =
+      (await response.json()) as KeycloakClientRepresentation[];
+
+    return (
+      clients.find(
+        (client) => client.clientId === clientId,
+      ) ?? null
+    );
+  }
+
+  private async toManagedAgentIdentity(
+    client: KeycloakClientRepresentation,
+    token: string,
+  ): Promise<ManagedAgentIdentity | null> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const serviceAccountResponse = await fetch(
+      `${baseUrl}/admin/realms/${realm}/clients/${client.id}/service-account-user`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!serviceAccountResponse.ok) {
+      return null;
+    }
+
+    const serviceAccount =
+      (await serviceAccountResponse.json()) as {
+        id: string;
+      };
+
+    const userResponse = await fetch(
+      `${baseUrl}/admin/realms/${realm}/users/${serviceAccount.id}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!userResponse.ok) {
+      throw new Error(
+        `Failed to read agent attributes: ${userResponse.status}`,
+      );
+    }
+
+    const user =
+      (await userResponse.json()) as KeycloakUserRepresentation;
+
+    const attributes = user.attributes ?? {};
+
+    const agentId = attributes.agent_id?.[0];
+    const tenantId = attributes.tenant_id?.[0];
+    const vmAccountId = attributes.vm_account_id?.[0];
+
+    if (!agentId || !tenantId || !vmAccountId) {
+      return null;
+    }
+
+    return {
+      agentId,
+      clientId: client.clientId,
+      tenantId,
+      vmAccountId,
+      enabled: client.enabled ?? false,
     };
   }
 
