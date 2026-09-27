@@ -15,6 +15,29 @@ receivers:
     start_at: end
 
 processors:
+  resource_detection/system:
+    detectors: [system]
+    override: false
+
+    system:
+      hostname_sources: [os]
+
+      resource_attributes:
+        host.name:
+          enabled: true
+
+        host.arch:
+          enabled: true
+
+        os.type:
+          enabled: true
+
+        os.description:
+          enabled: true
+
+        os.version:
+          enabled: true
+
   batch:
 
 extensions:
@@ -37,10 +60,10 @@ service:
   pipelines:
     metrics:
       receivers: [host_metrics]
-      processors: [batch]
+      processors: [resource_detection/system, batch]
       exporters: [otlp_http/gateway]
 
     logs:
       receivers: [journald]
-      processors: [batch]
+      processors: [resource_detection/system, batch]
       exporters: [otlp_http/gateway]

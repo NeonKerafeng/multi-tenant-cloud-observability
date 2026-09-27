@@ -47,8 +47,17 @@ extensions:
         action: upsert
 
 exporters:
-  prometheusremotewrite/victoriametrics:
+  prometheus_remote_write/victoriametrics:
     endpoint: http://vminsert:8480/insert/prometheus/api/v1/write
+
+    resource_constant_labels:
+      included:
+        - tenant.id
+        - agent.id
+        - host.name
+        - host.arch
+        - os.type
+
     auth:
       authenticator: headers_setter/victoriametrics
 
@@ -72,7 +81,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, resource/tenant]
-      exporters: [prometheusremotewrite/victoriametrics]
+      exporters: [prometheus_remote_write/victoriametrics]
 
     logs:
       receivers: [otlp]
