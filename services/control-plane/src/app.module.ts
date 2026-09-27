@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AgentsModule } from './agents/agents.module';
 import { KeycloakModule } from './keycloak/keycloak.module';
+import { EnrollmentsModule } from './enrollments/enrollments.module';
 
 @Module({
   imports: [
@@ -10,6 +11,7 @@ import { KeycloakModule } from './keycloak/keycloak.module';
     }),
     AgentsModule,
     KeycloakModule,
+    EnrollmentsModule,
   ],
 })
 export class AppModule {}

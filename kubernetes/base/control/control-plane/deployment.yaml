@@ -59,6 +59,18 @@ spec:
                   name: control-plane-keycloak
                   key: client_secret
 
+            - name: KEYCLOAK_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-endpoints
+                  key: KEYCLOAK_PUBLIC_URL
+
+            - name: OTEL_GATEWAY_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-endpoints
+                  key: OTEL_GATEWAY_PUBLIC_URL
+
           resources:
             requests:
               cpu: 100m
