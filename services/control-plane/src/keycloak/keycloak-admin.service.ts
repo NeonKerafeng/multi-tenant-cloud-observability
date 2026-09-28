@@ -26,6 +26,17 @@ export interface ManagedAgentIdentity {
   enabled: boolean;
 }
 
+export interface ManagedTenant {
+  tenantId: string;
+  vmAccountId: string;
+}
+
+type KeycloakGroupRepresentation = {
+  id: string;
+  name: string;
+  attributes?: Record<string, string[]>;
+};
+
 type KeycloakClientRepresentation =
   Record<string, unknown> & {
     id: string;
@@ -537,5 +548,188 @@ export class KeycloakAdminService {
         `Failed to create protocol mapper: ${response.status}`,
       );
     }
+  }
+
+  async listTenants(): Promise<ManagedTenant[]> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/groups?first=0&max=1000&briefRepresentation=false`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to list Keycloak groups: ${response.status}`,
+      );
+    }
+
+    const groups =
+      (await response.json()) as KeycloakGroupRepresentation[];
+
+    return groups
+      .map((group) => this.toManagedTenant(group))
+      .filter(
+        (tenant): tenant is ManagedTenant =>
+          tenant !== null,
+      );
+  }
+
+  async getTenant(
+    tenantId: string,
+  ): Promise<ManagedTenant | null> {
+    const token = await this.getAdminAccessToken();
+
+    const group =
+      await this.findTenantGroup(tenantId, token);
+
+    if (!group) {
+      return null;
+    }
+
+    return this.toManagedTenant(group);
+  }
+
+  async createTenant(
+    tenantId: string,
+    vmAccountId: string,
+  ): Promise<ManagedTenant> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/groups`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: tenantId,
+          attributes: {
+            vm_account_id: [vmAccountId],
+            mtco_tenant: ['true'],
+          },
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to create tenant group: ${response.status}`,
+      );
+    }
+
+    return {
+      tenantId,
+      vmAccountId,
+    };
+  }
+
+  async deleteTenant(
+    tenantId: string,
+  ): Promise<boolean> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const token = await this.getAdminAccessToken();
+
+    const group =
+      await this.findTenantGroup(tenantId, token);
+
+    if (!group) {
+      return false;
+    }
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/groups/${group.id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to delete tenant group: ${response.status}`,
+      );
+    }
+
+    return true;
+  }
+
+  private async findTenantGroup(
+    tenantId: string,
+    token: string,
+  ): Promise<KeycloakGroupRepresentation | null> {
+    const baseUrl =
+      this.config.getOrThrow<string>('KEYCLOAK_URL');
+
+    const realm =
+      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/groups?first=0&max=1000&briefRepresentation=false`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to find tenant group: ${response.status}`,
+      );
+    }
+
+    const groups =
+      (await response.json()) as KeycloakGroupRepresentation[];
+
+    return (
+      groups.find(
+        (group) => group.name === tenantId,
+      ) ?? null
+    );
+  }
+
+  private toManagedTenant(
+    group: KeycloakGroupRepresentation,
+  ): ManagedTenant | null {
+    const vmAccountId =
+      group.attributes?.vm_account_id?.[0];
+
+    if (
+      !vmAccountId ||
+      !/^\d+$/.test(vmAccountId)
+    ) {
+      return null;
+    }
+
+    return {
+      tenantId: group.name,
+      vmAccountId,
+    };
   }
 }
