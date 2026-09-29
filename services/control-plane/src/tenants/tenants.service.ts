@@ -8,6 +8,8 @@ import {
 
 import type { AuthUser } from '../auth/auth-user';
 
+import { AgentRepository } from '../agents/agent.repository';
+
 import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
 
 import {
@@ -20,6 +22,9 @@ export class TenantsService {
   constructor(
     private readonly tenants:
       TenantRepository,
+
+    private readonly agents:
+      AgentRepository,
 
     private readonly keycloak:
       KeycloakAdminService,
@@ -157,16 +162,13 @@ export class TenantsService {
      * After Agent Registry migration,
      * replace this with AgentRepository.
      */
-    const agents =
-      await this.keycloak
-        .listAgentIdentities();
+    const hasAgents =
+      await this.agents
+        .hasLiveAgentsForTenant(
+          tenantId,
+        );
 
-    if (
-      agents.some(
-        (agent) =>
-          agent.tenantId === tenantId,
-      )
-    ) {
+    if (hasAgents) {
       throw new ConflictException(
         'Tenant still has agents; revoke them first',
       );

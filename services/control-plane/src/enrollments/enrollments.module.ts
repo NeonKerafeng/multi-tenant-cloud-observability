@@ -1,16 +1,23 @@
 import { Module } from '@nestjs/common';
 
+import { AgentsModule } from '../agents/agents.module';
 import { AuthModule } from '../auth/auth.module';
-import { KeycloakModule } from '../keycloak/keycloak.module';
+
 import { EnrollmentsController } from './enrollments.controller';
 import { EnrollmentsService } from './enrollments.service';
 
 @Module({
   imports: [
     AuthModule,
-    KeycloakModule,
+    AgentsModule,
   ],
-  controllers: [EnrollmentsController],
-  providers: [EnrollmentsService],
+
+  controllers: [
+    EnrollmentsController,
+  ],
+
+  providers: [
+    EnrollmentsService,
+  ],
 })
 export class EnrollmentsModule {}

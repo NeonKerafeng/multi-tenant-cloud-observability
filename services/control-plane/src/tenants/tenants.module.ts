@@ -6,10 +6,12 @@ import { KeycloakModule } from '../keycloak/keycloak.module';
 import { TenantRepository } from './tenant.repository';
 import { TenantsController } from './tenants.controller';
 import { TenantsService } from './tenants.service';
+import { AgentsModule } from '../agents/agents.module';
 
 @Module({
   imports: [
     AuthModule,
+    AgentsModule,
     KeycloakModule,
   ],
 

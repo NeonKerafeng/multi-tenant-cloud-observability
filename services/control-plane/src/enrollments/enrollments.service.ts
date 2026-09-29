@@ -4,108 +4,156 @@ import {
   GoneException,
   Injectable,
 } from '@nestjs/common';
-import { createHash, randomBytes, randomUUID } from 'crypto';
 
-import { AuthUser } from '../auth/auth-user';
-import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
+import {
+  createHash,
+  randomBytes,
+} from 'crypto';
+
+import type { AuthUser } from '../auth/auth-user';
+
+import { AgentsService } from '../agents/agents.service';
 
 interface Enrollment {
   tenantId: string;
-  vmAccountId: string;
   expiresAt: number;
 }
 
 @Injectable()
 export class EnrollmentsService {
-  private readonly enrollments = new Map<string, Enrollment>();
+  private readonly enrollments =
+    new Map<string, Enrollment>();
 
   constructor(
-    private readonly keycloakAdminService: KeycloakAdminService,
+    private readonly agents:
+      AgentsService,
   ) {}
 
-  create(user: AuthUser) {
-    if (!user.roles.includes('tenant-admin')) {
-      throw new ForbiddenException('tenant-admin role required');
+  create(
+    user: AuthUser,
+  ) {
+    if (
+      !user.roles.includes(
+        'tenant-admin',
+      )
+    ) {
+      throw new ForbiddenException(
+        'tenant-admin role required',
+      );
     }
 
-    if (user.groups.length !== 1) {
+    const groups =
+      user.groups
+        .map(
+          (group) =>
+            group.replace(/^\/+/, ''),
+        )
+        .filter(Boolean);
+
+    if (groups.length !== 1) {
       throw new BadRequestException(
         'Exactly one tenant group is required',
       );
     }
 
-    if (
-      user.vmAccountIds.length !== 1 ||
-      !/^\d+$/.test(user.vmAccountIds[0])
-    ) {
-      throw new BadRequestException(
-        'Exactly one numeric vm_account_id is required',
-      );
-    }
+    const token =
+      randomBytes(32)
+        .toString('base64url');
 
-    const token = randomBytes(32).toString('base64url');
-    const tokenHash = this.hashToken(token);
+    const tokenHash =
+      this.hashToken(token);
 
-    const expiresAt = Date.now() + 10 * 60 * 1000;
+    const expiresAt =
+      Date.now() +
+      10 * 60 * 1000;
 
-    this.enrollments.set(tokenHash, {
-      tenantId: user.groups[0],
-      vmAccountId: user.vmAccountIds[0],
-      expiresAt,
-    });
+    this.enrollments.set(
+      tokenHash,
+      {
+        tenantId:
+          groups[0],
+
+        expiresAt,
+      },
+    );
 
     return {
-      enrollmentToken: token,
-      expiresAt: new Date(expiresAt).toISOString(),
+      enrollmentToken:
+        token,
+
+      expiresAt:
+        new Date(
+          expiresAt,
+        ).toISOString(),
     };
   }
 
-  async exchange(token: string) {
+  async exchange(
+    token: string,
+  ) {
     if (!token) {
-      throw new BadRequestException('Enrollment token is required');
+      throw new BadRequestException(
+        'Enrollment token is required',
+      );
     }
 
-    const tokenHash = this.hashToken(token);
-    const enrollment = this.enrollments.get(tokenHash);
+    const tokenHash =
+      this.hashToken(token);
+
+    const enrollment =
+      this.enrollments.get(
+        tokenHash,
+      );
 
     if (!enrollment) {
-      throw new ForbiddenException('Invalid enrollment token');
+      throw new ForbiddenException(
+        'Invalid enrollment token',
+      );
     }
 
-    if (Date.now() >= enrollment.expiresAt) {
-      this.enrollments.delete(tokenHash);
-      throw new GoneException('Enrollment token expired');
+    if (
+      Date.now() >=
+      enrollment.expiresAt
+    ) {
+      this.enrollments.delete(
+        tokenHash,
+      );
+
+      throw new GoneException(
+        'Enrollment token expired',
+      );
     }
 
-    // Consume BEFORE creating the identity.
-    // If provisioning fails, tenant admin simply creates a new token.
-    this.enrollments.delete(tokenHash);
+    /*
+     * Consume BEFORE provisioning.
+     * A failed provisioning requires
+     * a new enrollment token.
+     */
+    this.enrollments.delete(
+      tokenHash,
+    );
 
-    const agentId = randomUUID();
-
-    const identity =
-      await this.keycloakAdminService.createAgentIdentity({
-        agentId,
-        tenantId: enrollment.tenantId,
-        vmAccountId: enrollment.vmAccountId,
-      });
+    const agent =
+      await this.agents
+        .provisionAgentForTenant(
+          enrollment.tenantId,
+        );
 
     return {
-      agentId,
-      tenantId: enrollment.tenantId,
-      vmAccountId: enrollment.vmAccountId,
-      clientId: identity.clientId,
-      clientSecret: identity.clientSecret,
+      ...agent,
 
       tokenUrl:
         `${process.env.KEYCLOAK_PUBLIC_URL}/realms/observability/protocol/openid-connect/token`,
 
       gatewayEndpoint:
-        process.env.OTEL_GATEWAY_PUBLIC_URL,
+        process.env
+          .OTEL_GATEWAY_PUBLIC_URL,
     };
   }
 
-  private hashToken(token: string): string {
+  private hashToken(
+    token: string,
+  ): string {
     return createHash('sha256')
       .update(token)
       .digest('hex');

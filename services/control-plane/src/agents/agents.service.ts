@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,80 +9,121 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import type { AuthUser } from '../auth/auth-user';
+
+import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
+
 import {
-  KeycloakAdminService,
-  ManagedAgentIdentity,
-} from '../keycloak/keycloak-admin.service';
+  AgentRecord,
+  AgentRepository,
+} from './agent.repository';
 
 @Injectable()
 export class AgentsService {
   constructor(
-    private readonly keycloak: KeycloakAdminService,
+    private readonly keycloak:
+      KeycloakAdminService,
+
+    private readonly agents:
+      AgentRepository,
   ) {}
 
-  async createAgent(user: AuthUser) {
-    if (!user.roles.includes('tenant-admin')) {
+  async createAgent(
+    user: AuthUser,
+  ) {
+    if (
+      !user.roles.includes(
+        'tenant-admin',
+      )
+    ) {
       throw new ForbiddenException(
         'Only tenant admins can create agents',
       );
     }
 
-    const tenantId = this.getTenantAdminTenant(user);
+    const tenantId =
+      this.getTenantAdminTenant(user);
 
-    const vmAccountIds = user.vmAccountIds
-      .map((id) => id.trim())
-      .filter(Boolean);
+    return this.provisionAgentForTenant(
+      tenantId,
+    );
+  }
 
-    if (vmAccountIds.length !== 1) {
-      throw new ForbiddenException(
-        'Tenant must have exactly one VictoriaMetrics account ID',
-      );
-    }
-
-    const vmAccountId = vmAccountIds[0];
-
-    if (!/^\d+$/.test(vmAccountId)) {
-      throw new ForbiddenException(
-        'Invalid VictoriaMetrics account ID',
-      );
-    }
-
+  async provisionAgentForTenant(
+    tenantId: string,
+  ) {
     const agentId = randomUUID();
 
-    const identity =
-      await this.keycloak.createAgentIdentity({
-        agentId,
-        tenantId,
-        vmAccountId,
-      });
+    const agent =
+      await this.agents
+        .createProvisioning(
+          agentId,
+          tenantId,
+        );
 
-    return {
-      agentId,
-      tenantId,
-      vmAccountId,
-      clientId: identity.clientId,
-      clientSecret: identity.clientSecret,
-    };
+    if (!agent) {
+      throw new BadRequestException(
+        'Tenant does not exist or is not active',
+      );
+    }
+
+    try {
+      const identity =
+        await this.keycloak
+          .createAgentIdentity({
+            agentId,
+            tenantId:
+              agent.tenantId,
+            vmAccountId:
+              agent.vmAccountId,
+          });
+
+      const activeAgent =
+        await this.agents.markActive(
+          agentId,
+          identity.clientUuid,
+        );
+
+      if (!activeAgent) {
+        throw new Error(
+          'Failed to activate agent registry record',
+        );
+      }
+
+      return {
+        ...this.toResponse(
+          activeAgent,
+        ),
+
+        clientSecret:
+          identity.clientSecret,
+      };
+    } catch (error) {
+      await this.agents
+        .markError(agentId)
+        .catch(() => undefined);
+
+      throw error;
+    }
   }
 
   async listAgents(
     user: AuthUser,
     requestedTenant?: string,
   ) {
-    const agents =
-      await this.keycloak.listAgentIdentities();
-
     if (this.isPlatformAdmin(user)) {
-      if (!requestedTenant) {
-        return agents;
-      }
+      const agents =
+        await this.agents.findAll(
+          requestedTenant,
+        );
 
-      return agents.filter(
-        (agent) => agent.tenantId === requestedTenant,
+      return agents.map(
+        (agent) =>
+          this.toResponse(agent),
       );
     }
 
-    const tenantId = this.getTenantAdminTenant(user);
+    const tenantId =
+      this.getTenantAdminTenant(user);
 
     if (
       requestedTenant &&
@@ -91,8 +134,14 @@ export class AgentsService {
       );
     }
 
-    return agents.filter(
-      (agent) => agent.tenantId === tenantId,
+    const agents =
+      await this.agents.findAll(
+        tenantId,
+      );
+
+    return agents.map(
+      (agent) =>
+        this.toResponse(agent),
     );
   }
 
@@ -101,11 +150,16 @@ export class AgentsService {
     agentId: string,
   ) {
     const agent =
-      await this.requireAgent(agentId);
+      await this.requireAgent(
+        agentId,
+      );
 
-    this.assertCanManageAgent(user, agent);
+    this.assertCanManageAgent(
+      user,
+      agent,
+    );
 
-    return agent;
+    return this.toResponse(agent);
   }
 
   async disableAgent(
@@ -113,21 +167,41 @@ export class AgentsService {
     agentId: string,
   ) {
     const agent =
-      await this.requireAgent(agentId);
+      await this.requireAgent(
+        agentId,
+      );
 
-    this.assertCanManageAgent(user, agent);
+    this.assertCanManageAgent(
+      user,
+      agent,
+    );
+
+    const identity =
+      await this.keycloak
+        .setAgentEnabled(
+          agentId,
+          false,
+        );
+
+    if (!identity) {
+      throw new ConflictException(
+        'Agent exists in registry but Keycloak identity is missing',
+      );
+    }
 
     const updated =
-      await this.keycloak.setAgentEnabled(
+      await this.agents.setStatus(
         agentId,
-        false,
+        'disabled',
       );
 
     if (!updated) {
-      throw new NotFoundException('Agent not found');
+      throw new NotFoundException(
+        'Agent not found',
+      );
     }
 
-    return updated;
+    return this.toResponse(updated);
   }
 
   async enableAgent(
@@ -135,21 +209,41 @@ export class AgentsService {
     agentId: string,
   ) {
     const agent =
-      await this.requireAgent(agentId);
+      await this.requireAgent(
+        agentId,
+      );
 
-    this.assertCanManageAgent(user, agent);
+    this.assertCanManageAgent(
+      user,
+      agent,
+    );
+
+    const identity =
+      await this.keycloak
+        .setAgentEnabled(
+          agentId,
+          true,
+        );
+
+    if (!identity) {
+      throw new ConflictException(
+        'Agent exists in registry but Keycloak identity is missing',
+      );
+    }
 
     const updated =
-      await this.keycloak.setAgentEnabled(
+      await this.agents.setStatus(
         agentId,
-        true,
+        'active',
       );
 
     if (!updated) {
-      throw new NotFoundException('Agent not found');
+      throw new NotFoundException(
+        'Agent not found',
+      );
     }
 
-    return updated;
+    return this.toResponse(updated);
   }
 
   async deleteAgent(
@@ -157,16 +251,28 @@ export class AgentsService {
     agentId: string,
   ) {
     const agent =
-      await this.requireAgent(agentId);
+      await this.requireAgent(
+        agentId,
+      );
 
-    this.assertCanManageAgent(user, agent);
+    this.assertCanManageAgent(
+      user,
+      agent,
+    );
 
-    const deleted =
-      await this.keycloak.deleteAgentIdentity(agentId);
+    /*
+     * DB is source of truth.
+     * If Keycloak identity is already gone,
+     * revocation is already satisfied there.
+     */
+    await this.keycloak
+      .deleteAgentIdentity(
+        agentId,
+      );
 
-    if (!deleted) {
-      throw new NotFoundException('Agent not found');
-    }
+    await this.agents.markRevoked(
+      agentId,
+    );
 
     return {
       agentId,
@@ -176,12 +282,16 @@ export class AgentsService {
 
   private async requireAgent(
     agentId: string,
-  ): Promise<ManagedAgentIdentity> {
+  ): Promise<AgentRecord> {
     const agent =
-      await this.keycloak.getAgentIdentity(agentId);
+      await this.agents.findById(
+        agentId,
+      );
 
     if (!agent) {
-      throw new NotFoundException('Agent not found');
+      throw new NotFoundException(
+        'Agent not found',
+      );
     }
 
     return agent;
@@ -189,7 +299,7 @@ export class AgentsService {
 
   private assertCanManageAgent(
     user: AuthUser,
-    agent: ManagedAgentIdentity,
+    agent: AgentRecord,
   ): void {
     if (this.isPlatformAdmin(user)) {
       return;
@@ -198,31 +308,67 @@ export class AgentsService {
     const tenantId =
       this.getTenantAdminTenant(user);
 
-    if (agent.tenantId !== tenantId) {
+    if (
+      agent.tenantId !== tenantId
+    ) {
       throw new ForbiddenException(
         'Cannot manage agent from another tenant',
       );
     }
   }
 
+  private toResponse(
+    agent: AgentRecord,
+  ) {
+    return {
+      agentId:
+        agent.agentId,
+
+      clientId:
+        agent.clientId,
+
+      tenantId:
+        agent.tenantId,
+
+      vmAccountId:
+        agent.vmAccountId,
+
+      enabled:
+        agent.status === 'active',
+
+      status:
+        agent.status,
+    };
+  }
+
   private isPlatformAdmin(
     user: AuthUser,
   ): boolean {
-    return user.roles.includes('platform-admin');
+    return user.roles.includes(
+      'platform-admin',
+    );
   }
 
   private getTenantAdminTenant(
     user: AuthUser,
   ): string {
-    if (!user.roles.includes('tenant-admin')) {
+    if (
+      !user.roles.includes(
+        'tenant-admin',
+      )
+    ) {
       throw new ForbiddenException(
         'tenant-admin or platform-admin role required',
       );
     }
 
-    const groups = user.groups
-      .map((group) => group.replace(/^\/+/, ''))
-      .filter(Boolean);
+    const groups =
+      user.groups
+        .map(
+          (group) =>
+            group.replace(/^\/+/, ''),
+        )
+        .filter(Boolean);
 
     if (groups.length !== 1) {
       throw new ForbiddenException(
