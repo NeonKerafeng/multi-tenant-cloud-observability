@@ -11,6 +11,7 @@ resources:
   - ../../base/identity/keycloak
   - ../../base/query
   - ../../base/control/control-plane
+  - ../../base/control/control-plane-db
 
 secretGenerator:
   - name: opensearch-bootstrap
@@ -45,6 +46,10 @@ secretGenerator:
     envs:
       - control-plane-keycloak.env
 
+  - name: control-plane-db
+    envs:
+      - control-plane-db.env
+
 configMapGenerator:
   - name: platform-endpoints
     envs:
@@ -57,7 +62,7 @@ images:
 
   - name: control-plane
     newName: kerafeng/control-plane
-    newTag: v0.1.3
+    newTag: v0.2.0
 
 patches:
   - path: patches/keycloak.yaml
