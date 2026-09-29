@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { KeycloakModule } from './keycloak/keycloak.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { TenantsModule } from './tenants/tenants.module';
     AgentsModule,
     EnrollmentsModule,
     TenantsModule,
+    UsersModule,
   ],
 })
 export class AppModule {}

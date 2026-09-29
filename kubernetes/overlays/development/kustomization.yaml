@@ -62,7 +62,7 @@ images:
 
   - name: control-plane
     newName: kerafeng/control-plane
-    newTag: v0.3.1
+    newTag: v0.4.1
 
 patches:
   - path: patches/keycloak.yaml

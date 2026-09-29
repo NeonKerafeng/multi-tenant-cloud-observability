@@ -917,6 +917,12 @@ spec:
                 --cclientid realm-management \
                 --rolename manage-users
 
+              $KCADM add-roles \
+                -r "$REALM" \
+                --uusername "$SERVICE_ACCOUNT_USERNAME" \
+                --cclientid realm-management \
+                --rolename view-realm
+
               echo "Control Plane Admin client ready."
 
               # ========================================

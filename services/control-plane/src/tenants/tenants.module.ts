@@ -23,5 +23,9 @@ import { AgentsModule } from '../agents/agents.module';
     TenantsService,
     TenantRepository,
   ],
+
+  exports: [
+    TenantRepository,
+  ],
 })
 export class TenantsModule {}
