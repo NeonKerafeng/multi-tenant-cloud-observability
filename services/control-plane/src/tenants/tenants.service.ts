@@ -7,18 +7,36 @@ import {
 } from '@nestjs/common';
 
 import type { AuthUser } from '../auth/auth-user';
+
 import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
+
+import {
+  type TenantRecord,
+  TenantRepository,
+} from './tenant.repository';
 
 @Injectable()
 export class TenantsService {
   constructor(
-    private readonly keycloak: KeycloakAdminService,
+    private readonly tenants:
+      TenantRepository,
+
+    private readonly keycloak:
+      KeycloakAdminService,
   ) {}
 
-  async list(user: AuthUser) {
+  async list(
+    user: AuthUser,
+  ) {
     this.requirePlatformAdmin(user);
 
-    return this.keycloak.listTenants();
+    const tenants =
+      await this.tenants.findAll();
+
+    return tenants.map(
+      (tenant) =>
+        this.toResponse(tenant),
+    );
   }
 
   async get(
@@ -28,64 +46,79 @@ export class TenantsService {
     this.requirePlatformAdmin(user);
 
     const tenant =
-      await this.keycloak.getTenant(tenantId);
+      await this.tenants.findByKey(
+        tenantId,
+      );
 
-    if (!tenant) {
+    if (
+      !tenant ||
+      tenant.status === 'deleted'
+    ) {
       throw new NotFoundException(
         'Tenant not found',
       );
     }
 
-    return tenant;
+    return this.toResponse(
+      tenant,
+    );
   }
 
   async create(
     user: AuthUser,
     tenantId: string,
-    vmAccountId: string,
   ) {
     this.requirePlatformAdmin(user);
 
-    this.validateTenantId(tenantId);
-
-    if (
-      !vmAccountId ||
-      !/^[1-9]\d*$/.test(vmAccountId)
-    ) {
-      throw new BadRequestException(
-        'vmAccountId must be a positive integer',
-      );
-    }
-
-    const tenants =
-      await this.keycloak.listTenants();
-
-    if (
-      tenants.some(
-        (tenant) =>
-          tenant.tenantId === tenantId,
-      )
-    ) {
-      throw new ConflictException(
-        'Tenant already exists',
-      );
-    }
-
-    if (
-      tenants.some(
-        (tenant) =>
-          tenant.vmAccountId === vmAccountId,
-      )
-    ) {
-      throw new ConflictException(
-        'VictoriaMetrics account ID is already in use',
-      );
-    }
-
-    return this.keycloak.createTenant(
+    this.validateTenantId(
       tenantId,
-      vmAccountId,
     );
+
+    let tenant: TenantRecord;
+
+    try {
+      tenant =
+        await this.tenants
+          .createProvisioning(
+            tenantId,
+          );
+    } catch (error) {
+      if (
+        this.isUniqueViolation(
+          error,
+        )
+      ) {
+        throw new ConflictException(
+          'Tenant ID is already reserved',
+        );
+      }
+
+      throw error;
+    }
+
+    try {
+      const identity =
+        await this.keycloak.createTenant(
+          tenant.tenantKey,
+          tenant.vmAccountId,
+        );
+
+      const activeTenant =
+        await this.tenants.markActive(
+          tenant.id,
+          identity.groupId,
+        );
+
+      return this.toResponse(
+        activeTenant,
+      );
+    } catch (error) {
+      await this.tenants.markError(
+        tenant.id,
+      );
+
+      throw error;
+    }
   }
 
   async delete(
@@ -95,7 +128,9 @@ export class TenantsService {
     this.requirePlatformAdmin(user);
 
     const tenant =
-      await this.keycloak.getTenant(tenantId);
+      await this.tenants.findByKey(
+        tenantId,
+      );
 
     if (!tenant) {
       throw new NotFoundException(
@@ -103,8 +138,28 @@ export class TenantsService {
       );
     }
 
+    if (
+      tenant.status === 'deleted'
+    ) {
+      return {
+        tenantId,
+        deleted: true,
+      };
+    }
+
+    /*
+     * TEMPORARY SAFETY NET.
+     *
+     * Agent Registry is moving to PostgreSQL,
+     * but existing agents have not been
+     * backfilled yet.
+     *
+     * After Agent Registry migration,
+     * replace this with AgentRepository.
+     */
     const agents =
-      await this.keycloak.listAgentIdentities();
+      await this.keycloak
+        .listAgentIdentities();
 
     if (
       agents.some(
@@ -113,17 +168,28 @@ export class TenantsService {
       )
     ) {
       throw new ConflictException(
-        'Tenant still has agents; delete its agents first',
+        'Tenant still has agents; revoke them first',
       );
     }
 
-    const deleted =
-      await this.keycloak.deleteTenant(tenantId);
+    await this.tenants.markDeleting(
+      tenant.id,
+    );
 
-    if (!deleted) {
-      throw new NotFoundException(
-        'Tenant not found',
+    try {
+      await this.keycloak.deleteTenant(
+        tenantId,
       );
+
+      await this.tenants.markDeleted(
+        tenant.id,
+      );
+    } catch (error) {
+      await this.tenants.markError(
+        tenant.id,
+      );
+
+      throw error;
     }
 
     return {
@@ -132,11 +198,28 @@ export class TenantsService {
     };
   }
 
+  private toResponse(
+    tenant: TenantRecord,
+  ) {
+    return {
+      tenantId:
+        tenant.tenantKey,
+
+      vmAccountId:
+        tenant.vmAccountId,
+
+      status:
+        tenant.status,
+    };
+  }
+
   private requirePlatformAdmin(
     user: AuthUser,
   ): void {
     if (
-      !user.roles.includes('platform-admin')
+      !user.roles.includes(
+        'platform-admin',
+      )
     ) {
       throw new ForbiddenException(
         'platform-admin role required',
@@ -157,5 +240,20 @@ export class TenantsService {
         'tenantId must contain only lowercase letters, digits and hyphens',
       );
     }
+  }
+
+  private isUniqueViolation(
+    error: unknown,
+  ): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (
+        error as {
+          code?: string;
+        }
+      ).code === '23505'
+    );
   }
 }

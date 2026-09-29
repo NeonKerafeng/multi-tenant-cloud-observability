@@ -22,7 +22,6 @@ type AuthenticatedRequest = Request & {
 
 interface CreateTenantBody {
   tenantId?: string;
-  vmAccountId?: string;
 }
 
 @Controller('tenants')
@@ -58,7 +57,6 @@ export class TenantsController {
     return this.tenants.create(
       req.user,
       body.tenantId ?? '',
-      body.vmAccountId ?? '',
     );
   }
 

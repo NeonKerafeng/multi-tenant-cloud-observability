@@ -26,9 +26,8 @@ export interface ManagedAgentIdentity {
   enabled: boolean;
 }
 
-export interface ManagedTenant {
-  tenantId: string;
-  vmAccountId: string;
+export interface KeycloakTenantIdentity {
+  groupId: string;
 }
 
 type KeycloakGroupRepresentation = {
@@ -550,81 +549,47 @@ export class KeycloakAdminService {
     }
   }
 
-  async listTenants(): Promise<ManagedTenant[]> {
-    const baseUrl =
-      this.config.getOrThrow<string>('KEYCLOAK_URL');
-
-    const realm =
-      this.config.getOrThrow<string>('KEYCLOAK_REALM');
-
-    const token = await this.getAdminAccessToken();
-
-    const response = await fetch(
-      `${baseUrl}/admin/realms/${realm}/groups?first=0&max=1000&briefRepresentation=false`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to list Keycloak groups: ${response.status}`,
-      );
-    }
-
-    const groups =
-      (await response.json()) as KeycloakGroupRepresentation[];
-
-    return groups
-      .map((group) => this.toManagedTenant(group))
-      .filter(
-        (tenant): tenant is ManagedTenant =>
-          tenant !== null,
-      );
-  }
-
-  async getTenant(
-    tenantId: string,
-  ): Promise<ManagedTenant | null> {
-    const token = await this.getAdminAccessToken();
-
-    const group =
-      await this.findTenantGroup(tenantId, token);
-
-    if (!group) {
-      return null;
-    }
-
-    return this.toManagedTenant(group);
-  }
-
   async createTenant(
     tenantId: string,
     vmAccountId: string,
-  ): Promise<ManagedTenant> {
+  ): Promise<KeycloakTenantIdentity> {
     const baseUrl =
-      this.config.getOrThrow<string>('KEYCLOAK_URL');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_URL',
+      );
 
     const realm =
-      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_REALM',
+      );
 
-    const token = await this.getAdminAccessToken();
+    const token =
+      await this.getAdminAccessToken();
 
     const response = await fetch(
       `${baseUrl}/admin/realms/${realm}/groups`,
       {
         method: 'POST',
+
         headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+          Authorization:
+            `Bearer ${token}`,
+
+          'Content-Type':
+            'application/json',
         },
+
         body: JSON.stringify({
           name: tenantId,
+
           attributes: {
-            vm_account_id: [vmAccountId],
-            mtco_tenant: ['true'],
+            vm_account_id: [
+              vmAccountId,
+            ],
+
+            mtco_tenant: [
+              'true',
+            ],
           },
         }),
       },
@@ -636,36 +601,66 @@ export class KeycloakAdminService {
       );
     }
 
+    const location =
+      response.headers.get(
+        'location',
+      );
+
+    const groupId =
+      location
+        ?.split('/')
+        .pop();
+
+    if (!groupId) {
+      throw new Error(
+        'Keycloak did not return tenant group ID',
+      );
+    }
+
     return {
-      tenantId,
-      vmAccountId,
+      groupId,
     };
   }
 
   async deleteTenant(
     tenantId: string,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const baseUrl =
-      this.config.getOrThrow<string>('KEYCLOAK_URL');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_URL',
+      );
 
     const realm =
-      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_REALM',
+      );
 
-    const token = await this.getAdminAccessToken();
+    const token =
+      await this.getAdminAccessToken();
 
     const group =
-      await this.findTenantGroup(tenantId, token);
+      await this.findTenantGroup(
+        tenantId,
+        token,
+      );
 
+    /*
+     * Keycloak is only the identity mirror.
+     * If the mirror is already gone,
+     * deletion is already satisfied.
+     */
     if (!group) {
-      return false;
+      return;
     }
 
     const response = await fetch(
       `${baseUrl}/admin/realms/${realm}/groups/${group.id}`,
       {
         method: 'DELETE',
+
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization:
+            `Bearer ${token}`,
         },
       },
     );
@@ -675,8 +670,6 @@ export class KeycloakAdminService {
         `Failed to delete tenant group: ${response.status}`,
       );
     }
-
-    return true;
   }
 
   private async findTenantGroup(
@@ -684,16 +677,21 @@ export class KeycloakAdminService {
     token: string,
   ): Promise<KeycloakGroupRepresentation | null> {
     const baseUrl =
-      this.config.getOrThrow<string>('KEYCLOAK_URL');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_URL',
+      );
 
     const realm =
-      this.config.getOrThrow<string>('KEYCLOAK_REALM');
+      this.config.getOrThrow<string>(
+        'KEYCLOAK_REALM',
+      );
 
     const response = await fetch(
       `${baseUrl}/admin/realms/${realm}/groups?first=0&max=1000&briefRepresentation=false`,
       {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization:
+            `Bearer ${token}`,
         },
       },
     );
@@ -705,31 +703,15 @@ export class KeycloakAdminService {
     }
 
     const groups =
-      (await response.json()) as KeycloakGroupRepresentation[];
+      (
+        await response.json()
+      ) as KeycloakGroupRepresentation[];
 
     return (
       groups.find(
-        (group) => group.name === tenantId,
+        (group) =>
+          group.name === tenantId,
       ) ?? null
     );
-  }
-
-  private toManagedTenant(
-    group: KeycloakGroupRepresentation,
-  ): ManagedTenant | null {
-    const vmAccountId =
-      group.attributes?.vm_account_id?.[0];
-
-    if (
-      !vmAccountId ||
-      !/^\d+$/.test(vmAccountId)
-    ) {
-      return null;
-    }
-
-    return {
-      tenantId: group.name,
-      vmAccountId,
-    };
   }
 }
