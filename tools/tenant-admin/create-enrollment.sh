@@ -11,7 +11,7 @@ for cmd in curl python3; do
   fi
 done
 
-read -rp "Username: " USERNAME
+read -rp "Tenant admin username: " USERNAME
 read -rsp "Password: " PASSWORD
 echo
 

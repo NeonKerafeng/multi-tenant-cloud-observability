@@ -41,7 +41,7 @@ for cmd in curl jq; do
   fi
 done
 
-read -rp "Username: " USERNAME
+read -rp "Tenant/platform admin username: " USERNAME
 read -rsp "Password: " PASSWORD
 echo
 

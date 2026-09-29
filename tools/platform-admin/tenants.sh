@@ -36,7 +36,7 @@ case "$ACTION" in
     ;;
 esac
 
-read -rp "Username: " USERNAME
+read -rp "Platform admin username: " USERNAME
 read -rsp "Password: " PASSWORD
 echo
 
