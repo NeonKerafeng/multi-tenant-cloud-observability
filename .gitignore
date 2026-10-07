@@ -23,3 +23,6 @@ kubernetes/overlays/development/grafana-oidc.env
 kubernetes/overlays/development/*.env
 
 client/otel/agent.env
+
+CLAUDE.md
+WORK_NOTES.md

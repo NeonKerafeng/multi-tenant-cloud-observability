@@ -14,7 +14,9 @@ import type { Request, Response } from 'express';
 import type { AuthUser } from '../auth/auth-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
+import { resolveQueryAccess } from './access';
 import { HttpProxyService } from './http-proxy.service';
+import { resolveDownstreamPath } from './safe-path';
 
 type AuthenticatedRequest = Request & {
   user: AuthUser;
@@ -39,37 +41,26 @@ export class VictoriaMetricsController {
       );
     }
 
-    const clientPath =
-      req.originalUrl.replace('/query/victoriametrics', '');
+    const clientPath = req.originalUrl.replace('/query/victoriametrics', '');
 
     if (!clientPath.startsWith('/api/v1/')) {
+      throw new ForbiddenException('Unsupported VictoriaMetrics endpoint');
+    }
+
+    if (clientPath.startsWith('/api/v1/admin/')) {
       throw new ForbiddenException(
-        'Unsupported VictoriaMetrics endpoint',
+        'VictoriaMetrics admin endpoints are not allowed',
       );
     }
 
-    const user = req.user;
+    const access = resolveQueryAccess(req.user);
 
-    const platformAdmin =
-      user.roles.includes('platform-admin');
+    let tenantSegment: string;
 
-    let targetPath: string;
-
-    if (platformAdmin) {
-      targetPath =
-        `/select/multitenant/prometheus${clientPath}`;
+    if (access.platformAdmin) {
+      tenantSegment = 'multitenant';
     } else {
-      const groups = user.groups
-        .map((group) => group.replace(/^\/+/, ''))
-        .filter(Boolean);
-
-      if (groups.length !== 1) {
-        throw new ForbiddenException(
-          'User must belong to exactly one tenant group',
-        );
-      }
-
-      const vmAccountIds = user.vmAccountIds
+      const vmAccountIds = req.user.vmAccountIds
         .map((accountId) => accountId.trim())
         .filter(Boolean);
 
@@ -87,14 +78,22 @@ export class VictoriaMetricsController {
         );
       }
 
-      targetPath =
-        `/select/${accountId}/prometheus${clientPath}`;
+      tenantSegment = accountId;
     }
 
-    const baseUrl =
-      this.config.getOrThrow<string>(
-        'VICTORIAMETRICS_URL',
-      );
+    const requiredPrefix = `/select/${tenantSegment}/prometheus/api/v1/`;
+
+    const baseUrl = this.config.getOrThrow<string>('VICTORIAMETRICS_URL');
+
+    /*
+     * Validate the FINAL path (after URL normalization), not the raw
+     * client string. See safe-path.ts.
+     */
+    const targetPath = resolveDownstreamPath(
+      baseUrl,
+      `/select/${tenantSegment}/prometheus${clientPath}`,
+      requiredPrefix,
+    );
 
     await this.proxy.forward(
       baseUrl,
