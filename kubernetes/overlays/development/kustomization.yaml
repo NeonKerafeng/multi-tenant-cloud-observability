@@ -58,7 +58,7 @@ configMapGenerator:
 images:
   - name: query-gateway
     newName: kerafeng/query-gateway
-    newTag: v0.1.11-e2e
+    newTag: v0.1.13
 
   - name: control-plane
     newName: kerafeng/control-plane
