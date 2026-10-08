@@ -219,6 +219,49 @@ export class KeycloakUsersService {
     );
   }
 
+  /**
+   * Users holding a realm role (used to adopt platform admins, which are
+   * bootstrap identities not created through this API).
+   */
+  async listUsersWithRealmRole(
+    roleName: string,
+  ): Promise<ManagedHumanUser[]> {
+    const token =
+      await this.keycloak
+        .getAdminAccessToken();
+
+    const { baseUrl, realm } =
+      this.getConfig();
+
+    const response = await fetch(
+      `${baseUrl}/admin/realms/${realm}/roles/${encodeURIComponent(roleName)}/users?first=0&max=1000`,
+      {
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to list users with role ${roleName}: ${response.status}`,
+      );
+    }
+
+    const users = (await response.json()) as KeycloakUserRepresentation[];
+
+    return Promise.all(
+      users.map(
+        (user) =>
+          this.toManagedUser(
+            user,
+            token,
+          ),
+      ),
+    );
+  }
+
   async getUserInGroup(
     userId: string,
     groupId: string,

@@ -16,7 +16,11 @@ import type {
   TenantRecord,
 } from '../tenants/tenant.repository';
 
+import { DatabaseService } from '../database/database.service';
+import { OutboxRepository } from '../sync/outbox.repository';
+
 import { KeycloakUsersService } from './keycloak-users.service';
+import { UserRepository } from './user.repository';
 
 import type {
   HumanRole,
@@ -40,6 +44,15 @@ export class UsersService {
 
     private readonly keycloakUsers:
       KeycloakUsersService,
+
+    private readonly db:
+      DatabaseService,
+
+    private readonly users:
+      UserRepository,
+
+    private readonly outbox:
+      OutboxRepository,
   ) {}
 
   async list(
@@ -105,29 +118,71 @@ export class UsersService {
       input.role,
     );
 
-    return this.keycloakUsers
-      .createUser({
-        groupId:
+    const created =
+      await this.keycloakUsers
+        .createUser({
+          groupId:
+            tenant.keycloakGroupId!,
+
+          username:
+            input.username.trim(),
+
+          password:
+            input.password,
+
+          firstName:
+            input.firstName.trim(),
+
+          lastName:
+            input.lastName.trim(),
+
+          email:
+            input.email.trim(),
+
+          role:
+            input.role,
+        });
+
+    /*
+     * Record the user (source of truth) + "mirror into Grafana" in ONE
+     * transaction. If that fails, undo the Keycloak user so the two never
+     * disagree.
+     */
+    try {
+      await this.db.transaction(
+        async (tx) => {
+          const id =
+            await this.users.upsertActive(
+              tx,
+              {
+                keycloakUserId: created.id,
+                username: created.username,
+                email: created.email ?? input.email.trim(),
+                enabled: created.enabled,
+              },
+              tenant.id,
+              input.role,
+            );
+
+          await this.outbox.enqueue(
+            tx,
+            'user',
+            id,
+          );
+        },
+      );
+    } catch (error) {
+      await this.keycloakUsers
+        .deleteUserInGroup(
+          created.id,
           tenant.keycloakGroupId!,
+        )
+        .catch(() => undefined);
 
-        username:
-          input.username.trim(),
+      throw error;
+    }
 
-        password:
-          input.password,
-
-        firstName:
-          input.firstName.trim(),
-
-        lastName:
-          input.lastName.trim(),
-
-        email:
-          input.email.trim(),
-
-        role:
-          input.role,
-      });
+    return created;
   }
 
   async disable(
@@ -191,6 +246,24 @@ export class UsersService {
       );
     }
 
+    await this.db.transaction(
+      async (tx) => {
+        const id =
+          await this.users.markDeleted(
+            tx,
+            userId,
+          );
+
+        if (id) {
+          await this.outbox.enqueue(
+            tx,
+            'user',
+            id,
+          );
+        }
+      },
+    );
+
     return {
       userId,
       deleted: true,
@@ -233,6 +306,38 @@ export class UsersService {
         'User not found',
       );
     }
+
+    await this.db.transaction(
+      async (tx) => {
+        /*
+         * Users created before the users table existed are adopted here
+         * (target role is tenant-admin or viewer, enforced above).
+         */
+        const id =
+          (await this.users.setEnabled(
+            tx,
+            userId,
+            enabled,
+          )) ??
+          (await this.users.upsertActive(
+            tx,
+            {
+              keycloakUserId: updated.id,
+              username: updated.username,
+              email: updated.email ?? '',
+              enabled: updated.enabled,
+            },
+            tenant.id,
+            target.role as 'tenant-admin' | 'viewer',
+          ));
+
+        await this.outbox.enqueue(
+          tx,
+          'user',
+          id,
+        );
+      },
+    );
 
     return updated;
   }

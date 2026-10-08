@@ -2,13 +2,17 @@ import {
   Injectable,
 } from '@nestjs/common';
 
-import { DatabaseService } from '../database/database.service';
+import {
+  DatabaseService,
+  type Queryable,
+} from '../database/database.service';
 
 export interface TenantRecord {
   id: string;
   tenantKey: string;
   vmAccountId: string;
   keycloakGroupId: string | null;
+  grafanaOrgId: number | null;
 
   status:
     | 'provisioning'
@@ -27,6 +31,7 @@ interface TenantRow {
   tenant_key: string;
   vm_account_id: string;
   keycloak_group_id: string | null;
+  grafana_org_id: string | null;
   status: TenantRecord['status'];
   created_at: Date;
   updated_at: Date;
@@ -48,6 +53,7 @@ export class TenantRepository {
           tenant_key,
           vm_account_id,
           keycloak_group_id,
+          grafana_org_id,
           status,
           created_at,
           updated_at,
@@ -63,6 +69,35 @@ export class TenantRepository {
     );
   }
 
+  async findById(
+    id: string,
+  ): Promise<TenantRecord | null> {
+    const result =
+      await this.db.query<TenantRow>(
+        `
+        SELECT
+          id,
+          tenant_key,
+          vm_account_id,
+          keycloak_group_id,
+          grafana_org_id,
+          status,
+          created_at,
+          updated_at,
+          deleted_at
+        FROM tenants
+        WHERE id = $1
+        `,
+        [id],
+      );
+
+    const row = result.rows[0];
+
+    return row
+      ? this.map(row)
+      : null;
+  }
+
   async findByKey(
     tenantKey: string,
   ): Promise<TenantRecord | null> {
@@ -74,6 +109,7 @@ export class TenantRepository {
           tenant_key,
           vm_account_id,
           keycloak_group_id,
+          grafana_org_id,
           status,
           created_at,
           updated_at,
@@ -110,6 +146,7 @@ export class TenantRepository {
           tenant_key,
           vm_account_id,
           keycloak_group_id,
+          grafana_org_id,
           status,
           created_at,
           updated_at,
@@ -126,9 +163,10 @@ export class TenantRepository {
   async markActive(
     id: string,
     keycloakGroupId: string,
+    q: Queryable = this.db,
   ): Promise<TenantRecord> {
     const result =
-      await this.db.query<TenantRow>(
+      await q.query<TenantRow>(
         `
         UPDATE tenants
         SET
@@ -140,6 +178,7 @@ export class TenantRepository {
           tenant_key,
           vm_account_id,
           keycloak_group_id,
+          grafana_org_id,
           status,
           created_at,
           updated_at,
@@ -197,6 +236,42 @@ export class TenantRepository {
     );
   }
 
+  /**
+   * Same as markDeleted, inside a caller-provided transaction.
+   */
+  async markDeletedTx(
+    q: Queryable,
+    id: string,
+  ): Promise<void> {
+    await q.query(
+      `
+      UPDATE tenants
+      SET
+        status = 'deleted',
+        deleted_at = now()
+      WHERE id = $1
+      `,
+      [id],
+    );
+  }
+
+  async setGrafanaOrgId(
+    id: string,
+    grafanaOrgId: number,
+  ): Promise<void> {
+    await this.db.query(
+      `
+      UPDATE tenants
+      SET grafana_org_id = $2
+      WHERE id = $1
+      `,
+      [
+        id,
+        grafanaOrgId,
+      ],
+    );
+  }
+
   private map(
     row: TenantRow,
   ): TenantRecord {
@@ -211,6 +286,11 @@ export class TenantRepository {
 
       keycloakGroupId:
         row.keycloak_group_id,
+
+      grafanaOrgId:
+        row.grafana_org_id === null
+          ? null
+          : Number(row.grafana_org_id),
 
       status:
         row.status,

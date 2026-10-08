@@ -10,12 +10,17 @@ import type { AuthUser } from '../auth/auth-user';
 
 import { AgentRepository } from '../agents/agent.repository';
 
+import { DatabaseService } from '../database/database.service';
+import { OutboxRepository } from '../sync/outbox.repository';
+import { UserRepository } from '../users/user.repository';
+
 import { KeycloakAdminService } from '../keycloak/keycloak-admin.service';
 
 import {
   type TenantRecord,
   TenantRepository,
 } from './tenant.repository';
+
 
 @Injectable()
 export class TenantsService {
@@ -28,6 +33,15 @@ export class TenantsService {
 
     private readonly keycloak:
       KeycloakAdminService,
+
+    private readonly db:
+      DatabaseService,
+
+    private readonly outbox:
+      OutboxRepository,
+
+    private readonly users:
+      UserRepository,
   ) {}
 
   async list(
@@ -108,10 +122,29 @@ export class TenantsService {
           tenant.vmAccountId,
         );
 
+      /*
+       * Active + "mirror me into Grafana" in ONE transaction: the
+       * outbox worker creates the org asynchronously and retries until
+       * it succeeds. GET /sync/status shows progress.
+       */
       const activeTenant =
-        await this.tenants.markActive(
-          tenant.id,
-          identity.groupId,
+        await this.db.transaction(
+          async (tx) => {
+            const active =
+              await this.tenants.markActive(
+                tenant.id,
+                identity.groupId,
+                tx,
+              );
+
+            await this.outbox.enqueue(
+              tx,
+              'tenant',
+              tenant.id,
+            );
+
+            return active;
+          },
         );
 
       return this.toResponse(
@@ -183,8 +216,38 @@ export class TenantsService {
         tenantId,
       );
 
-      await this.tenants.markDeleted(
-        tenant.id,
+      /*
+       * Deleted + its users deleted + "remove from Grafana" events,
+       * in ONE transaction. The worker deletes the Grafana org and the
+       * users' Grafana accounts asynchronously.
+       */
+      await this.db.transaction(
+        async (tx) => {
+          await this.tenants.markDeletedTx(
+            tx,
+            tenant.id,
+          );
+
+          const userIds =
+            await this.users.markTenantUsersDeleted(
+              tx,
+              tenant.id,
+            );
+
+          await this.outbox.enqueue(
+            tx,
+            'tenant',
+            tenant.id,
+          );
+
+          for (const userId of userIds) {
+            await this.outbox.enqueue(
+              tx,
+              'user',
+              userId,
+            );
+          }
+        },
       );
     } catch (error) {
       await this.tenants.markError(
@@ -209,6 +272,9 @@ export class TenantsService {
 
       vmAccountId:
         tenant.vmAccountId,
+
+      grafanaOrgId:
+        tenant.grafanaOrgId,
 
       status:
         tenant.status,

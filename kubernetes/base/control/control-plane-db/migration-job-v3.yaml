@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: control-plane-db-migrate-v3
+
+spec:
+  backoffLimit: 10
+
+  template:
+    metadata:
+      labels:
+        app: control-plane-db-migrate
+
+    spec:
+      restartPolicy: OnFailure
+
+      containers:
+        - name: migrate
+          image: postgres:17-alpine
+
+          env:
+            - name: DB_HOST
+              value: control-plane-postgres
+
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: database
+
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: username
+
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: password
+
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Waiting for Control Plane PostgreSQL..."
+
+              until pg_isready \
+                -h "$DB_HOST" \
+                -U "$DB_USER" \
+                -d "$DB_NAME";
+              do
+                sleep 2
+              done
+
+              echo "Running migration v3..."
+
+              psql \
+                -v ON_ERROR_STOP=1 \
+                -h "$DB_HOST" \
+                -U "$DB_USER" \
+                -d "$DB_NAME" \
+                -f /migrations/003_sync.sql
+
+              echo "Migration v3 complete."
+
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+
+      volumes:
+        - name: migrations
+          configMap:
+            name: control-plane-db-migrations-v3

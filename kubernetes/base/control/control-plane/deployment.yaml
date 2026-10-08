@@ -26,6 +26,14 @@ spec:
             - name: http
               containerPort: 8080
 
+          # Ready only once Nest listens (after the outbox worker started),
+          # so a rollout replaces the old pod only after the new one is up.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
           env:
             - name: PORT
               value: "8080"
@@ -70,6 +78,30 @@ spec:
                 configMapKeyRef:
                   name: platform-endpoints
                   key: OTEL_GATEWAY_PUBLIC_URL
+
+            # Control Plane -> Grafana HTTP API (one org per tenant).
+            - name: GRAFANA_URL
+              value: http://grafana:3000
+
+            - name: GRAFANA_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: username
+
+            - name: GRAFANA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
+
+            # Tenant that owns Grafana org 1 (platform admins live here).
+            - name: GRAFANA_DEFAULT_TENANT
+              value: admin-tenant
+
+            # Datasource URL written into every tenant org.
+            - name: QUERY_GATEWAY_URL
+              value: http://query-gateway:8080
 
             # Database
             - name: DB_HOST

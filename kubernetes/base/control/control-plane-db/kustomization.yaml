@@ -4,8 +4,23 @@ kind: Kustomization
 resources:
   - postgres.yaml
   - migration-job.yaml
+  - migration-job-v2.yaml
+  - migration-job-v3.yaml
+  - migration-job-v4.yaml
 
 configMapGenerator:
   - name: control-plane-db-migrations-v1
     files:
       - 001_init.sql
+
+  - name: control-plane-db-migrations-v2
+    files:
+      - 002_grafana_org.sql
+
+  - name: control-plane-db-migrations-v3
+    files:
+      - 003_sync.sql
+
+  - name: control-plane-db-migrations-v4
+    files:
+      - 004_support_access.sql

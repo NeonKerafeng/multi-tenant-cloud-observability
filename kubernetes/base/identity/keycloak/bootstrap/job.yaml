@@ -814,6 +814,28 @@ spec:
               echo "Control Plane Admin client ready."
 
               # ========================================
+              # Lock self-service account changes
+              # ========================================
+
+              # Grafana matches Keycloak logins to the Grafana users that
+              # control-plane pre-provisions BY EMAIL. Users must therefore
+              # not be able to change their own email (account takeover).
+              # Only control-plane (admin API) changes user attributes.
+              echo "Removing self-service account management from default roles..."
+
+              for ACCOUNT_ROLE in manage-account manage-account-links; do
+                $KCADM remove-roles \
+                  -r "$REALM" \
+                  --rname "default-roles-$REALM" \
+                  --cclientid account \
+                  --rolename "$ACCOUNT_ROLE" \
+                  >/dev/null 2>&1 || true
+              done
+
+              echo "Self-service account management disabled."
+
+
+              # ========================================
               # Done
               # ========================================
 

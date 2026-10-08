@@ -23,5 +23,9 @@ import { UsersService } from './users.service';
     UsersService,
     KeycloakUsersService,
   ],
+
+  exports: [
+    KeycloakUsersService,
+  ],
 })
 export class UsersModule {}

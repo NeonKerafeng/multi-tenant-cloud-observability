@@ -48,8 +48,9 @@ spec:
             - name: GF_AUTH_GENERIC_OAUTH_NAME
               value: Keycloak
 
+            # Only users pre-provisioned by control-plane may sign in.
             - name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
-              value: "true"
+              value: "false"
 
 
             # Grafana OIDC client identity
@@ -88,6 +89,36 @@ spec:
             # Keycloak role -> Grafana role
             - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH
               value: "contains(realm_access.roles[*], 'platform-admin') && 'Admin' || contains(realm_access.roles[*], 'tenant-admin') && 'Editor' || contains(realm_access.roles[*], 'viewer') && 'Viewer' || 'None'"
+
+            # ------------------------------------------------------------
+            # One org per tenant, managed ONLY by control-plane (TODO-02).
+            # control-plane pre-creates every Grafana user and sets its org
+            # memberships/roles through the API; nobody edits them by hand.
+            # ------------------------------------------------------------
+
+            # Login does not touch org memberships or roles.
+            - name: GF_AUTH_GENERIC_OAUTH_SKIP_ORG_ROLE_SYNC
+              value: "true"
+
+            # Match the Keycloak login to the pre-provisioned user by email
+            # (Grafana otherwise only matches by IdP user id). Safe because
+            # there is a single IdP, emails are unique and verified, and
+            # users cannot edit their email (keycloak-bootstrap removes
+            # self-service account management).
+            - name: GF_AUTH_OAUTH_ALLOW_INSECURE_EMAIL_LOOKUP
+              value: "true"
+
+            # Keep Grafana login == Keycloak username (not the email).
+            - name: GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH
+              value: preferred_username
+
+            # No human local login: the internal admin is API-only
+            # (used by control-plane).
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+
+            - name: GF_USERS_ALLOW_ORG_CREATE
+              value: "false"
 
             - name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT
               value: "true"
