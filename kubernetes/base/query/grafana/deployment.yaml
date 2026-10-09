@@ -4,10 +4,16 @@ metadata:
   name: grafana
 
 spec:
-  replicas: 1
+  # HA (TODO-02 step 7): replicas are stateless, state lives in
+  # grafana-postgres; sessions are stored in the DB so any replica serves
+  # any user.
+  replicas: 2
 
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
 
   selector:
     matchLabels:
@@ -22,11 +28,88 @@ spec:
       securityContext:
         fsGroup: 472
 
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: grafana
+
+      initContainers:
+        - name: wait-for-db
+          image: postgres:17-alpine
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until pg_isready -h grafana-postgres -p 5432; do
+                echo "waiting for grafana-postgres..."
+                sleep 2
+              done
+
       containers:
         - name: grafana
           image: grafana/grafana:13.2.1
 
           env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+
+            - name: GOMEMLIMIT
+              value: "900MiB"
+
+            # ------------------------------------------------------------
+            # Shared state in Postgres (TODO-02 step 7).
+            # ------------------------------------------------------------
+            - name: GF_DATABASE_TYPE
+              value: postgres
+
+            - name: GF_DATABASE_HOST
+              value: grafana-postgres:5432
+
+            - name: GF_DATABASE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db
+                  key: database
+
+            - name: GF_DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db
+                  key: username
+
+            - name: GF_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db
+                  key: password
+
+            - name: GF_DATABASE_SSL_MODE
+              value: disable
+
+            # Must be identical on every replica (encrypts datasource
+            # secrets in the DB). Never change it once data exists.
+            - name: GF_SECURITY_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db
+                  key: secret_key
+
+            # Unified alerting HA: replicas gossip so each alert is
+            # evaluated and notified once.
+            - name: GF_UNIFIED_ALERTING_HA_PEERS
+              value: grafana-alerting:9094
+
+            - name: GF_UNIFIED_ALERTING_HA_LISTEN_ADDRESS
+              value: "$(POD_IP):9094"
+
+            - name: GF_UNIFIED_ALERTING_HA_ADVERTISE_ADDRESS
+              value: "$(POD_IP):9094"
+
             # Grafana local admin
             - name: GF_SECURITY_ADMIN_USER
               valueFrom:
@@ -134,6 +217,14 @@ spec:
             - name: http
               containerPort: 3000
 
+            - name: gossip-tcp
+              containerPort: 9094
+              protocol: TCP
+
+            - name: gossip-udp
+              containerPort: 9094
+              protocol: UDP
+
           volumeMounts:
             - name: data
               mountPath: /var/lib/grafana
@@ -163,18 +254,21 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
 
+          # 512Mi was OOMKilled (2026-10-09) with alerting HA, live and the
+          # OpenSearch plugin loaded. GOMEMLIMIT makes the Go GC work harder
+          # before the container limit is reached.
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
 
       volumes:
+        # Plugins/cache only: all durable state is in grafana-postgres.
         - name: data
-          persistentVolumeClaim:
-            claimName: grafana-data
+          emptyDir: {}
         - name: datasource-provisioning
           configMap:
             name: grafana-datasources

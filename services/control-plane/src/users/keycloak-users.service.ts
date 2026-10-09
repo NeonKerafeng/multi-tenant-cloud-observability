@@ -34,6 +34,14 @@ export interface CreateHumanUserInput {
   role: 'tenant-admin' | 'viewer';
 }
 
+export interface InitialPlatformAdminInput {
+  username: string;
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+}
+
 interface KeycloakUserRepresentation {
   id: string;
   username?: string;
@@ -180,6 +188,134 @@ export class KeycloakUsersService {
     }
   }
 
+  /**
+   * Idempotent: makes sure the initial platform admin exists (platform
+   * bootstrap). Creates it with the given password only when the username
+   * is unknown; an existing account keeps its password and only gets the
+   * platform-admin realm role ensured.
+   */
+  async ensurePlatformAdmin(
+    input: InitialPlatformAdminInput,
+  ): Promise<{
+    id: string;
+    username: string;
+    email: string | null;
+    enabled: boolean;
+    created: boolean;
+  }> {
+    const token =
+      await this.keycloak
+        .getAdminAccessToken();
+
+    const { baseUrl, realm } =
+      this.getConfig();
+
+    const search = await fetch(
+      `${baseUrl}/admin/realms/${realm}/users?exact=true&username=${encodeURIComponent(input.username)}`,
+      {
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!search.ok) {
+      throw new Error(
+        `Failed to search Keycloak users: ${search.status}`,
+      );
+    }
+
+    const found =
+      ((await search.json()) as KeycloakUserRepresentation[])
+        .find(
+          (user) =>
+            user.username === input.username.toLowerCase(),
+        );
+
+    let userId = found?.id;
+    let created = false;
+
+    if (!userId) {
+      const response = await fetch(
+        `${baseUrl}/admin/realms/${realm}/users`,
+        {
+          method: 'POST',
+
+          headers: {
+            Authorization:
+              `Bearer ${token}`,
+
+            'Content-Type':
+              'application/json',
+          },
+
+          body: JSON.stringify({
+            username: input.username,
+            email: input.email,
+            firstName: input.firstName,
+            lastName: input.lastName,
+            emailVerified: true,
+            enabled: true,
+            requiredActions: [],
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to create platform admin: ${response.status}`,
+        );
+      }
+
+      userId =
+        response.headers
+          .get('location')
+          ?.split('/')
+          .pop();
+
+      if (!userId) {
+        throw new Error(
+          'Keycloak did not return user ID',
+        );
+      }
+
+      await this.setPassword(
+        userId,
+        input.password,
+        token,
+      );
+
+      created = true;
+    }
+
+    await this.assignRealmRole(
+      userId,
+      'platform-admin',
+      token,
+    );
+
+    const user =
+      await this.getUser(
+        userId,
+        token,
+      );
+
+    if (!user) {
+      throw new Error(
+        'Platform admin disappeared from Keycloak',
+      );
+    }
+
+    return {
+      id: user.id,
+      username: user.username ?? input.username,
+      email: user.email ?? null,
+      enabled: user.enabled ?? true,
+      created,
+    };
+  }
+
   async listUsersInGroup(
     groupId: string,
   ): Promise<ManagedHumanUser[]> {
@@ -223,45 +359,6 @@ export class KeycloakUsersService {
    * Users holding a realm role (used to adopt platform admins, which are
    * bootstrap identities not created through this API).
    */
-  async listUsersWithRealmRole(
-    roleName: string,
-  ): Promise<ManagedHumanUser[]> {
-    const token =
-      await this.keycloak
-        .getAdminAccessToken();
-
-    const { baseUrl, realm } =
-      this.getConfig();
-
-    const response = await fetch(
-      `${baseUrl}/admin/realms/${realm}/roles/${encodeURIComponent(roleName)}/users?first=0&max=1000`,
-      {
-        headers: {
-          Authorization:
-            `Bearer ${token}`,
-        },
-      },
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to list users with role ${roleName}: ${response.status}`,
-      );
-    }
-
-    const users = (await response.json()) as KeycloakUserRepresentation[];
-
-    return Promise.all(
-      users.map(
-        (user) =>
-          this.toManagedUser(
-            user,
-            token,
-          ),
-      ),
-    );
-  }
-
   async getUserInGroup(
     userId: string,
     groupId: string,
@@ -457,7 +554,7 @@ export class KeycloakUsersService {
   private async assignRealmRole(
     userId: string,
     roleName:
-      'tenant-admin' | 'viewer',
+      'platform-admin' | 'tenant-admin' | 'viewer',
     token: string,
   ): Promise<void> {
     const { baseUrl, realm } =

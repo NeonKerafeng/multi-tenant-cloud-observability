@@ -165,11 +165,52 @@ describe('GrafanaSyncService.syncUser', () => {
       user: user({ role: 'tenant-admin', grafanaUserId: 5 }),
       orgs: [{ orgId: 7, name: 'alpha-key', role: 'Admin' }],
     });
-    grafana.getUser.mockResolvedValue({ id: 5 });
+    grafana.getUser.mockResolvedValue({ id: 5, login: 'alice', email: 'alice@example.com' });
 
     await service.syncUser('u1');
 
     expect(grafana.updateOrgUserRole).toHaveBeenCalledWith(7, 5, 'Editor');
+  });
+
+  it('ignores a stored Grafana id that now belongs to someone else (Grafana rebuilt)', async () => {
+    const { service, grafana, userRepo } = setup({
+      user: user({ grafanaUserId: 2 }),
+      orgs: [],
+    });
+    grafana.getUser.mockResolvedValue({
+      id: 2,
+      login: 'alpha-admin',
+      email: 'alphaadmin@example.com',
+    });
+
+    await service.syncUser('u1');
+
+    expect(grafana.lookupUser).toHaveBeenCalledWith('alice@example.com');
+    expect(grafana.createUser).toHaveBeenCalled();
+    expect(userRepo.setGrafanaUserId).toHaveBeenCalledWith('u1', 42);
+    expect(grafana.addOrgUser).toHaveBeenCalledWith(7, 'alice@example.com', 'Viewer');
+    expect(grafana.updateOrgUserRole).not.toHaveBeenCalledWith(
+      expect.anything(),
+      2,
+      expect.anything(),
+    );
+  });
+
+  it('keeps a stored Grafana id that still matches the user', async () => {
+    const { service, grafana } = setup({
+      user: user({ grafanaUserId: 5 }),
+      orgs: [{ orgId: 7, name: 'alpha-key', role: 'Viewer' }],
+    });
+    grafana.getUser.mockResolvedValue({
+      id: 5,
+      login: 'alice',
+      email: 'alice@example.com',
+    });
+
+    await service.syncUser('u1');
+
+    expect(grafana.lookupUser).not.toHaveBeenCalled();
+    expect(grafana.createUser).not.toHaveBeenCalled();
   });
 
   it('deletes the Grafana account of a disabled user (Grafana cannot disable SSO users)', async () => {

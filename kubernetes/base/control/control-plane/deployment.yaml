@@ -16,6 +16,69 @@ spec:
         app: control-plane
 
     spec:
+      # Schema migrations run here, before the app starts, in file order.
+      # schema_migrations records what ran; an advisory lock serializes
+      # concurrent pods (rolling update, several replicas). Adding a .sql file
+      # changes the ConfigMap hash -> new rollout -> it runs. No Jobs.
+      initContainers:
+        - name: migrate
+          image: postgres:17-alpine
+
+          env:
+            - name: PGHOST
+              value: control-plane-postgres
+
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: database
+
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: username
+
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: control-plane-db
+                  key: password
+
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until pg_isready -q; do
+                echo "Waiting for control-plane-postgres..."
+                sleep 2
+              done
+
+              SCRIPT=/tmp/migrate.sql
+              {
+                printf '%s\n' "SELECT pg_advisory_lock(727001);"
+                printf '%s\n' "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
+                for f in $(ls /migrations/*.sql | sort); do
+                  v=$(basename "$f")
+                  printf '%s\n' "SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '$v') AS pending \\gset"
+                  printf '%s\n' "\\if :pending"
+                  printf '%s\n' "\\echo applying $v"
+                  printf '%s\n' "\\i $f"
+                  printf '%s\n' "INSERT INTO schema_migrations (version) VALUES ('$v');"
+                  printf '%s\n' "\\endif"
+                done
+                printf '%s\n' "SELECT pg_advisory_unlock(727001);"
+              } > "$SCRIPT"
+
+              psql -v ON_ERROR_STOP=1 -q -f "$SCRIPT"
+              echo "Migrations up to date."
+
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+
       containers:
         - name: control-plane
 
@@ -103,6 +166,30 @@ spec:
             - name: QUERY_GATEWAY_URL
               value: http://query-gateway:8080
 
+            # Initial platform admin, created once at startup if the DB has
+            # none (PlatformBootstrapService). Optional: without it the
+            # platform starts with no human admin.
+            - name: PLATFORM_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: platform-admin
+                  key: username
+                  optional: true
+
+            - name: PLATFORM_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-admin
+                  key: email
+                  optional: true
+
+            - name: PLATFORM_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-admin
+                  key: password
+                  optional: true
+
             # Database
             - name: DB_HOST
               value: control-plane-postgres
@@ -135,3 +222,8 @@ spec:
             limits:
               cpu: 500m
               memory: 512M
+
+      volumes:
+        - name: migrations
+          configMap:
+            name: control-plane-db-migrations

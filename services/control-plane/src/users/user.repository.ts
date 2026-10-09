@@ -84,6 +84,21 @@ export class UserRepository {
       : null;
   }
 
+  /** Most recent row for a username (any status), or null. */
+  async findByUsername(
+    username: string,
+  ): Promise<UserRecord | null> {
+    const result =
+      await this.db.query<UserRow>(
+        `${SELECT_USER} WHERE lower(u.username) = lower($1) ORDER BY u.created_at DESC LIMIT 1`,
+        [username],
+      );
+
+    return result.rows[0]
+      ? this.map(result.rows[0])
+      : null;
+  }
+
   async findIdsForSync(): Promise<string[]> {
     const result =
       await this.db.query<{ id: string }>(
@@ -175,8 +190,8 @@ export class UserRepository {
   }
 
   /**
-   * Adopts a Keycloak identity that control-plane does not know yet
-   * (users created before this table existed, platform admins).
+   * Registers a Keycloak identity if control-plane does not know it yet
+   * (used by the platform bootstrap for the initial platform admin).
    * Known rows only get their identity attributes refreshed; tenant,
    * role and status stay owned by control-plane, and deleted rows are
    * never resurrected. Returns the row id.

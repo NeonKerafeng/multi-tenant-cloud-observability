@@ -25,11 +25,19 @@ function setup() {
   const repo = { setGrafanaOrgId: jest.fn().mockResolvedValue(undefined) };
 
   const grafana = {
-    getOrg: jest.fn().mockResolvedValue({ id: 1, name: 'Main Org.' }),
+    getOrg: jest.fn((id: number) =>
+      Promise.resolve(
+        id === 7
+          ? { id: 7, name: 'alpha-tenant' }
+          : { id, name: 'Main Org.' },
+      ),
+    ),
+    findOrgByName: jest.fn().mockResolvedValue(null),
     renameOrg: jest.fn().mockResolvedValue(undefined),
     ensureOrg: jest.fn().mockResolvedValue(7),
     deleteOrg: jest.fn().mockResolvedValue(undefined),
     upsertDatasource: jest.fn().mockResolvedValue(undefined),
+    ensureDashboard: jest.fn().mockResolvedValue(true),
   };
 
   const service = new TenantGrafanaService(
@@ -72,6 +80,22 @@ describe('TenantGrafanaService', () => {
     expect(repo.setGrafanaOrgId).toHaveBeenCalledWith('id-alpha-tenant', 7);
   });
 
+  it('provisions the default dashboard in the platform org and in tenant orgs', async () => {
+    const { service, grafana } = setup();
+
+    await service.provisionOrg(tenant('admin-tenant', null));
+    await service.provisionOrg(tenant('alpha-tenant', null));
+
+    expect(
+      (grafana.ensureDashboard.mock.calls as [number, { uid: string }][]).map(
+        ([org, d]) => [org, d.uid],
+      ),
+    ).toEqual([
+      [1, 'mtco-host-overview'],
+      [7, 'mtco-host-overview'],
+    ]);
+  });
+
   it('does not rewrite grafana_org_id when already correct', async () => {
     const { service, repo } = setup();
 
@@ -86,6 +110,26 @@ describe('TenantGrafanaService', () => {
     await service.removeOrg(tenant('admin-tenant', 1));
 
     expect(grafana.deleteOrg).not.toHaveBeenCalled();
+  });
+
+  it('never deletes another tenant org reusing a stale id (Grafana rebuilt)', async () => {
+    const { service, grafana } = setup();
+
+    // id 7 is now alpha-tenant's org, but this is beta-tenant.
+    await service.removeOrg(tenant('beta-tenant', 7));
+
+    expect(grafana.deleteOrg).not.toHaveBeenCalled();
+    expect(grafana.findOrgByName).toHaveBeenCalledWith('beta-tenant');
+  });
+
+  it('with a stale id, deletes the org found by name', async () => {
+    const { service, grafana } = setup();
+    grafana.findOrgByName.mockResolvedValue({ id: 9, name: 'beta-tenant' });
+
+    await service.removeOrg(tenant('beta-tenant', 7));
+
+    expect(grafana.deleteOrg).toHaveBeenCalledWith(9);
+    expect(grafana.deleteOrg).toHaveBeenCalledTimes(1);
   });
 
   it('deletes the org of a normal tenant', async () => {

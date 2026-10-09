@@ -108,8 +108,9 @@ INSERT INTO tenants (
   status
 )
 VALUES
-  ('admin-tenant', 1, 'active'),
-  ('test-tenant', 2, 'active')
+  -- The platform's own tenant: Grafana org 1, VictoriaMetrics account 1.
+  -- Its Keycloak group is created by control-plane at startup.
+  ('admin-tenant', 1, 'active')
 ON CONFLICT (tenant_key) DO NOTHING;
 
 SELECT setval(

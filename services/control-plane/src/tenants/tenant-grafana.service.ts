@@ -7,6 +7,8 @@ import {
   GrafanaAdminService,
 } from '../grafana/grafana-admin.service';
 
+import { defaultDashboards } from '../grafana/default-dashboards';
+
 import {
   type TenantRecord,
   TenantRepository,
@@ -58,6 +60,13 @@ export class TenantGrafanaService {
       }
     }
 
+    for (const dashboard of defaultDashboards()) {
+      await this.grafana.ensureDashboard(
+        orgId,
+        dashboard,
+      );
+    }
+
     if (tenant.grafanaOrgId !== orgId) {
       await this.tenants.setGrafanaOrgId(
         tenant.id,
@@ -75,12 +84,35 @@ export class TenantGrafanaService {
     tenant: TenantRecord,
   ): Promise<void> {
     if (
-      tenant.grafanaOrgId !== null &&
-      tenant.grafanaOrgId !== DEFAULT_GRAFANA_ORG_ID
+      tenant.grafanaOrgId === null ||
+      tenant.grafanaOrgId === DEFAULT_GRAFANA_ORG_ID
     ) {
+      return;
+    }
+
+    /*
+     * Delete only if the stored id still names THIS tenant's org: after a
+     * Grafana rebuild the id may belong to another tenant now.
+     */
+    const org =
+      await this.grafana.getOrg(
+        tenant.grafanaOrgId,
+      );
+
+    if (org && org.name === tenant.tenantKey) {
       await this.grafana.deleteOrg(
         tenant.grafanaOrgId,
       );
+      return;
+    }
+
+    const byName =
+      await this.grafana.findOrgByName(
+        tenant.tenantKey,
+      );
+
+    if (byName && byName.id !== DEFAULT_GRAFANA_ORG_ID) {
+      await this.grafana.deleteOrg(byName.id);
     }
   }
 

@@ -429,6 +429,58 @@ export class GrafanaAdminService {
     );
   }
 
+  /**
+   * Creates the dashboard in the org if no dashboard with its uid exists.
+   * Never overwrites: a tenant's edited copy wins. Returns true if created.
+   */
+  async ensureDashboard(
+    orgId: number,
+    dashboard: { uid: string; title: string },
+  ): Promise<boolean> {
+    const existing =
+      await this.request(
+        'GET',
+        `/api/dashboards/uid/${encodeURIComponent(dashboard.uid)}`,
+        undefined,
+        orgId,
+      );
+
+    if (existing.ok) {
+      return false;
+    }
+
+    if (existing.status !== 404) {
+      await this.assertOk(
+        existing,
+        'read Grafana dashboard',
+      );
+    }
+
+    const response =
+      await this.request(
+        'POST',
+        '/api/dashboards/db',
+        {
+          dashboard: { ...dashboard, id: null },
+          overwrite: false,
+          message: 'Provisioned by control-plane',
+        },
+        orgId,
+      );
+
+    // 412 = created concurrently by another replica: fine.
+    if (response.status === 412) {
+      return false;
+    }
+
+    await this.assertOk(
+      response,
+      'create Grafana dashboard',
+    );
+
+    return true;
+  }
+
   private async ensureAdminMembership(
     orgId: number,
   ): Promise<void> {

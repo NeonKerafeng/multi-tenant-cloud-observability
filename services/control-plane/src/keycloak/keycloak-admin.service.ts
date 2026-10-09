@@ -480,6 +480,36 @@ export class KeycloakAdminService {
     };
   }
 
+  /**
+   * Idempotent: returns the tenant group's id, creating the group only if
+   * it does not exist yet (used by the platform bootstrap at startup).
+   */
+  async ensureTenantGroup(
+    tenantId: string,
+    vmAccountId: string,
+  ): Promise<string> {
+    const token =
+      await this.getAdminAccessToken();
+
+    const existing =
+      await this.findTenantGroup(
+        tenantId,
+        token,
+      );
+
+    if (existing) {
+      return existing.id;
+    }
+
+    const created =
+      await this.createTenant(
+        tenantId,
+        vmAccountId,
+      );
+
+    return created.groupId;
+  }
+
   async deleteTenant(
     tenantId: string,
   ): Promise<void> {

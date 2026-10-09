@@ -73,3 +73,19 @@ describe('retryDelaySeconds', () => {
     ]);
   });
 });
+
+import { renderMetrics } from './metrics.controller';
+
+describe('renderMetrics', () => {
+  it('renders Prometheus text format gauges', () => {
+    expect(
+      renderMetrics([
+        ['mtco_outbox_pending_events', 'Pending.', 3],
+        ['mtco_outbox_oldest_pending_seconds', 'Oldest.', Number.NaN],
+      ]),
+    ).toBe(
+      '# HELP mtco_outbox_pending_events Pending.\n# TYPE mtco_outbox_pending_events gauge\nmtco_outbox_pending_events 3\n' +
+        '# HELP mtco_outbox_oldest_pending_seconds Oldest.\n# TYPE mtco_outbox_oldest_pending_seconds gauge\nmtco_outbox_oldest_pending_seconds 0\n',
+    );
+  });
+});

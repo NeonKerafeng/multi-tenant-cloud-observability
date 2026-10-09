@@ -2,12 +2,15 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module';
 import { GrafanaModule } from '../grafana/grafana.module';
+import { KeycloakModule } from '../keycloak/keycloak.module';
 import { SupportAccessModule } from '../support-access/support-access.module';
 import { TenantsModule } from '../tenants/tenants.module';
 import { UsersModule } from '../users/users.module';
 
 import { GrafanaSyncService } from './grafana-sync.service';
+import { MetricsController } from './metrics.controller';
 import { OutboxWorker } from './outbox.worker';
+import { PlatformBootstrapService } from './platform-bootstrap.service';
 import { ResyncService } from './resync.service';
 import { SyncController } from './sync.controller';
 
@@ -22,18 +25,21 @@ import { SyncController } from './sync.controller';
   imports: [
     AuthModule,
     GrafanaModule,
+    KeycloakModule,
     SupportAccessModule,
     TenantsModule,
     UsersModule,
   ],
 
   controllers: [
+    MetricsController,
     SyncController,
   ],
 
   providers: [
     GrafanaSyncService,
     OutboxWorker,
+    PlatformBootstrapService,
     ResyncService,
   ],
 })

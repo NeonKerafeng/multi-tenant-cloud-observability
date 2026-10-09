@@ -42,6 +42,10 @@ secretGenerator:
     envs:
       - grafana-oidc.env
 
+  - name: grafana-db
+    envs:
+      - grafana-db.env
+
   - name: control-plane-keycloak
     envs:
       - control-plane-keycloak.env
@@ -49,6 +53,10 @@ secretGenerator:
   - name: control-plane-db
     envs:
       - control-plane-db.env
+
+  - name: platform-admin
+    envs:
+      - platform-admin.env
 
 configMapGenerator:
   - name: platform-endpoints
@@ -62,7 +70,20 @@ images:
 
   - name: control-plane
     newName: kerafeng/control-plane
-    newTag: v0.6.1
+    newTag: v0.6.3
 
 patches:
   - path: patches/keycloak.yaml
+
+  # Volumes of this environment. The Viettel Cloud CSI cannot provision
+  # (2026-10-08: "no volume type" for both csi-sc-viettelplugin-hdd and -ssd,
+  # cluster-wide), so development uses local-path (install once:
+  # kubectl apply -k kubernetes/infra/local-path-provisioner).
+  # When the CSI works again, set csi-sc-viettelplugin-ssd/-hdd here.
+  # Base manifests stay cloud-neutral.
+  - target:
+      kind: StatefulSet
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: local-path

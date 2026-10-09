@@ -117,6 +117,21 @@ export class SupportAccessRepository {
     }));
   }
 
+  /** Grants in effect right now (for /metrics). */
+  async countActive(): Promise<number> {
+    const result =
+      await this.db.query<{ count: string }>(
+        `
+        SELECT count(*) AS count
+        FROM support_access
+        WHERE revoked_at IS NULL
+          AND expires_at > now()
+        `,
+      );
+
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
   /** Users holding a grant on this tenant whose end is not synced yet. */
   async findOpenUserIdsByTenant(
     tenantId: string,

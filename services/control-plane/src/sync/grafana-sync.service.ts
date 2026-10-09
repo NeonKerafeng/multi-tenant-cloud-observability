@@ -285,8 +285,23 @@ export class GrafanaSyncService {
           user.grafanaUserId,
         );
 
-      if (existing) {
+      /*
+       * Trust a stored id only if it still belongs to THIS person. After
+       * Grafana is rebuilt (new DB, restore) ids are reassigned and the
+       * stored id may now be someone else's account.
+       */
+      if (
+        existing &&
+        (existing.login === user.username ||
+          existing.email === user.email)
+      ) {
         return existing.id;
+      }
+
+      if (existing) {
+        this.logger.warn(
+          `${user.username}: stored Grafana user ${user.grafanaUserId} belongs to ${existing.login}; ignoring it`,
+        );
       }
     }
 

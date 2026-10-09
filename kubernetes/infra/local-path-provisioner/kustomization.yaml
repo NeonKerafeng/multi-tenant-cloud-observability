@@ -1,0 +1,16 @@
+# Cluster infrastructure, NOT part of the application overlays.
+# Installed once per cluster:  kubectl apply -k kubernetes/infra/local-path-provisioner
+#
+# Why: on the Viettel Cloud lab cluster the CSI driver stopped provisioning
+# (2026-10-08: "CreateVolume: no volume type for (disk type hdd|ssd, zone ...)"
+# for every StorageClass, every namespace). local-path-provisioner stores each
+# volume in a directory on the node that runs the pod (/opt/local-path-provisioner).
+# Development only: a volume lives and dies with its node.
+#
+# local-path-storage.yaml = upstream rancher/local-path-provisioner v0.0.37
+# deploy/local-path-storage.yaml, unmodified.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - local-path-storage.yaml

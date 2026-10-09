@@ -1,0 +1,24 @@
+# Headless service for Grafana unified alerting HA (gossip between
+# replicas), so alerts are evaluated/notified once, not once per replica.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-alerting
+
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+
+  selector:
+    app: grafana
+
+  ports:
+    - name: gossip-tcp
+      port: 9094
+      targetPort: gossip-tcp
+      protocol: TCP
+
+    - name: gossip-udp
+      port: 9094
+      targetPort: gossip-udp
+      protocol: UDP
