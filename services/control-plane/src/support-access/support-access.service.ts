@@ -45,7 +45,7 @@ const DEFAULT_SWEEP_MS = 30 * 1000;
  *
  * - grant:  platform-admin, for themself, with a reason
  * - list:   platform-admin (any tenant) or that tenant's tenant-admin
- * - revoke: platform-admin or that tenant's tenant-admin
+ * - revoke: platform-admin only
  */
 @Injectable()
 export class SupportAccessService
@@ -183,10 +183,12 @@ export class SupportAccessService
     tenantKey: string,
     grantId: string,
   ) {
+    // Only platform admins revoke (decided 2026-10-09); tenant admins can
+    // still SEE who accesses their tenant (listForTenant).
+    this.requirePlatformAdmin(actor);
+
     const tenant =
       await this.requireTenant(tenantKey);
-
-    this.requireTenantOversight(actor, tenant.tenantKey);
 
     if (!this.isUuid(grantId)) {
       throw new NotFoundException('Support access not found');

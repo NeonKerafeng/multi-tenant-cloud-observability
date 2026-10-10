@@ -24,7 +24,7 @@ USAGE
 get_token() {
   local username password response token
 
-  read -r -p "Username (platform-admin; tenant-admin for list/revoke): " username
+  read -r -p "Username (platform-admin; tenant-admin may only list): " username
   read -r -s -p "Password: " password
   echo >&2
 

@@ -36,7 +36,7 @@ function activeOnly(
  *
  *   POST   /tenants/:tenantId/support-access           platform-admin
  *   GET    /tenants/:tenantId/support-access[?active]  platform-admin | tenant-admin
- *   DELETE /tenants/:tenantId/support-access/:id       platform-admin | tenant-admin
+ *   DELETE /tenants/:tenantId/support-access/:id       platform-admin
  *   GET    /support-access[?active]                    platform-admin
  */
 @Controller()

@@ -91,6 +91,16 @@ export class ResyncService
         }
       }
 
+      /*
+       * Deleted tenants whose Grafana org could not be deleted yet
+       * (Grafana bug, see TenantGrafanaService.removeOrg): retried here
+       * until Grafana accepts the delete.
+       */
+      for (const tenantId of await this.tenants.findIdsWithLeftoverGrafanaOrg()) {
+        await this.outbox.enqueue(this.db, 'tenant', tenantId);
+        tenantsQueued++;
+      }
+
       const userIds = await this.users.findIdsForSync();
 
       for (const userId of userIds) {

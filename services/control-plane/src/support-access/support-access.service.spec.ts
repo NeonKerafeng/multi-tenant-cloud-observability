@@ -225,10 +225,19 @@ describe('SupportAccessService oversight', () => {
     ).rejects.toThrow(/tenant-admin/);
   });
 
-  it('the tenant admin can revoke; the admin is enqueued to lose access', async () => {
+  it('a tenant admin cannot revoke (platform admins only)', async () => {
+    const { service, grants } = setup();
+
+    await expect(
+      service.revoke(alphaAdmin, 'alpha-tenant', GRANT_ID),
+    ).rejects.toThrow(/platform-admin/);
+    expect(grants.revoke).not.toHaveBeenCalled();
+  });
+
+  it('a platform admin can revoke; the admin is enqueued to lose access', async () => {
     const { service, grants, outbox, tx } = setup();
 
-    await service.revoke(alphaAdmin, 'alpha-tenant', GRANT_ID);
+    await service.revoke(platformAdmin, 'alpha-tenant', GRANT_ID);
 
     expect(grants.revoke).toHaveBeenCalledWith(tx, GRANT_ID, 'root-admin');
     expect(outbox.enqueue).toHaveBeenCalledWith(tx, 'user', 'u-admin');
@@ -248,7 +257,7 @@ describe('SupportAccessService oversight', () => {
     });
 
     await expect(
-      service.revoke(betaAdmin, 'beta-tenant', GRANT_ID),
+      service.revoke(platformAdmin, 'beta-tenant', GRANT_ID),
     ).rejects.toThrow(/not found/);
     expect(grants.revoke).not.toHaveBeenCalled();
   });

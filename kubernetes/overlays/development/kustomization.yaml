@@ -70,17 +70,11 @@ images:
 
   - name: control-plane
     newName: kerafeng/control-plane
-    newTag: v0.6.3
+    newTag: v0.6.5
 
 patches:
   - path: patches/keycloak.yaml
 
-  # Volumes of this environment. The Viettel Cloud CSI cannot provision
-  # (2026-10-08: "no volume type" for both csi-sc-viettelplugin-hdd and -ssd,
-  # cluster-wide), so development uses local-path (install once:
-  # kubectl apply -k kubernetes/infra/local-path-provisioner).
-  # When the CSI works again, set csi-sc-viettelplugin-ssd/-hdd here.
-  # Base manifests stay cloud-neutral.
   - target:
       kind: StatefulSet
     patch: |-

@@ -272,6 +272,43 @@ export class TenantRepository {
     );
   }
 
+  /** Forgets the org once Grafana has really deleted it. */
+  async clearGrafanaOrgId(
+    id: string,
+  ): Promise<void> {
+    await this.db.query(
+      `
+      UPDATE tenants
+      SET grafana_org_id = NULL
+      WHERE id = $1
+      `,
+      [
+        id,
+      ],
+    );
+  }
+
+  /**
+   * Deleted tenants whose Grafana org still exists (retired because
+   * Grafana refused the delete). The resync retries them.
+   */
+  async findIdsWithLeftoverGrafanaOrg(): Promise<string[]> {
+    const result =
+      await this.db.query<{ id: string }>(
+        `
+        SELECT id
+        FROM tenants
+        WHERE status = 'deleted'
+          AND grafana_org_id IS NOT NULL
+        ORDER BY vm_account_id
+        `,
+      );
+
+    return result.rows.map(
+      (row) => row.id,
+    );
+  }
+
   private map(
     row: TenantRow,
   ): TenantRecord {

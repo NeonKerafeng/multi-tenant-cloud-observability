@@ -22,10 +22,13 @@ function tenant(tenantKey: string, grafanaOrgId: number | null): TenantRecord {
 }
 
 function setup() {
-  const repo = { setGrafanaOrgId: jest.fn().mockResolvedValue(undefined) };
+  const repo = {
+    setGrafanaOrgId: jest.fn().mockResolvedValue(undefined),
+    clearGrafanaOrgId: jest.fn().mockResolvedValue(undefined),
+  };
 
   const grafana = {
-    getOrg: jest.fn((id: number) =>
+    getOrg: jest.fn((id: number): Promise<{ id: number; name: string } | null> =>
       Promise.resolve(
         id === 7
           ? { id: 7, name: 'alpha-tenant' }
@@ -35,7 +38,8 @@ function setup() {
     findOrgByName: jest.fn().mockResolvedValue(null),
     renameOrg: jest.fn().mockResolvedValue(undefined),
     ensureOrg: jest.fn().mockResolvedValue(7),
-    deleteOrg: jest.fn().mockResolvedValue(undefined),
+    deleteOrg: jest.fn().mockResolvedValue('deleted'),
+    retireOrg: jest.fn().mockResolvedValue(undefined),
     upsertDatasource: jest.fn().mockResolvedValue(undefined),
     ensureDashboard: jest.fn().mockResolvedValue(true),
   };
@@ -132,11 +136,45 @@ describe('TenantGrafanaService', () => {
     expect(grafana.deleteOrg).toHaveBeenCalledTimes(1);
   });
 
-  it('deletes the org of a normal tenant', async () => {
-    const { service, grafana } = setup();
+  it('deletes the org of a normal tenant and forgets its id', async () => {
+    const { service, grafana, repo } = setup();
 
     await service.removeOrg(tenant('alpha-tenant', 7));
 
     expect(grafana.deleteOrg).toHaveBeenCalledWith(7);
+    expect(grafana.retireOrg).not.toHaveBeenCalled();
+    expect(repo.clearGrafanaOrgId).toHaveBeenCalledWith('id-alpha-tenant');
+  });
+
+  it('retires the org when Grafana refuses the delete, and keeps the id for a retry', async () => {
+    const { service, grafana, repo } = setup();
+    grafana.deleteOrg.mockResolvedValue('refused');
+
+    await expect(service.removeOrg(tenant('alpha-tenant', 7))).resolves.toBeUndefined();
+
+    expect(grafana.retireOrg).toHaveBeenCalledWith(7, '[deleted] alpha-tenant');
+    expect(repo.clearGrafanaOrgId).not.toHaveBeenCalled();
+  });
+
+  it('retries the delete of an already retired org', async () => {
+    const { service, grafana, repo } = setup();
+    grafana.getOrg.mockResolvedValue({ id: 7, name: '[deleted] alpha-tenant' });
+
+    await service.removeOrg(tenant('alpha-tenant', 7));
+
+    expect(grafana.deleteOrg).toHaveBeenCalledWith(7);
+    expect(repo.clearGrafanaOrgId).toHaveBeenCalledWith('id-alpha-tenant');
+  });
+
+  it('forgets the id when the org is already gone', async () => {
+    const { service, grafana, repo } = setup();
+    grafana.getOrg.mockResolvedValue(null);
+
+    await service.removeOrg(tenant('beta-tenant', 9));
+
+    expect(grafana.findOrgByName).toHaveBeenCalledWith('beta-tenant');
+    expect(grafana.findOrgByName).toHaveBeenCalledWith('[deleted] beta-tenant');
+    expect(grafana.deleteOrg).not.toHaveBeenCalled();
+    expect(repo.clearGrafanaOrgId).toHaveBeenCalledWith('id-beta-tenant');
   });
 });

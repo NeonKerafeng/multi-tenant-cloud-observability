@@ -163,10 +163,16 @@ export class GrafanaAdminService {
 
   /**
    * Deletes an org. A missing org counts as success.
+   *
+   * Returns 'refused' when Grafana answers 500: Grafana 13.x cannot
+   * delete ANY org on unified storage (grafana/grafana#127386: the delete
+   * path issues a `deletecollection` on dashboards, which unified storage
+   * rejects with 405). The caller then retires the org instead and
+   * retries the delete later. Other errors throw.
    */
   async deleteOrg(
     orgId: number,
-  ): Promise<void> {
+  ): Promise<'deleted' | 'refused'> {
     const response =
       await this.request(
         'DELETE',
@@ -174,13 +180,94 @@ export class GrafanaAdminService {
       );
 
     if (response.status === 404) {
-      return;
+      return 'deleted';
+    }
+
+    if (response.status === 500) {
+      await response.text().catch(() => '');
+      return 'refused';
     }
 
     await this.assertOk(
       response,
       'delete Grafana org',
     );
+
+    return 'deleted';
+  }
+
+  /**
+   * Empties an org that cannot be deleted, in the order that removes
+   * access first: every member except the Grafana server admin, then
+   * datasources, dashboards, folders (with their alert rules), and
+   * finally renames it. Idempotent; missing objects count as success.
+   */
+  async retireOrg(
+    orgId: number,
+    retiredName: string,
+  ): Promise<void> {
+    const adminLogin =
+      this.config.getOrThrow<string>(
+        'GRAFANA_ADMIN_USER',
+      );
+
+    for (const member of await this.listJson<{ userId: number; login: string }>(
+      `/api/orgs/${orgId}/users`,
+      'list Grafana org users',
+    )) {
+      if (member.login !== adminLogin) {
+        await this.removeOrgUser(
+          orgId,
+          member.userId,
+        );
+      }
+    }
+
+    for (const datasource of await this.listJson<{ uid: string }>(
+      '/api/datasources',
+      'list Grafana datasources',
+      orgId,
+    )) {
+      await this.deleteIfPresent(
+        `/api/datasources/uid/${encodeURIComponent(datasource.uid)}`,
+        'delete Grafana datasource',
+        orgId,
+      );
+    }
+
+    for (const dashboard of await this.listJson<{ uid: string }>(
+      '/api/search?type=dash-db&limit=5000',
+      'list Grafana dashboards',
+      orgId,
+    )) {
+      await this.deleteIfPresent(
+        `/api/dashboards/uid/${encodeURIComponent(dashboard.uid)}`,
+        'delete Grafana dashboard',
+        orgId,
+      );
+    }
+
+    for (const folder of await this.listJson<{ uid: string }>(
+      '/api/folders?limit=1000',
+      'list Grafana folders',
+      orgId,
+    )) {
+      await this.deleteIfPresent(
+        `/api/folders/${encodeURIComponent(folder.uid)}?forceDeleteRules=true`,
+        'delete Grafana folder',
+        orgId,
+      );
+    }
+
+    const org =
+      await this.getOrg(orgId);
+
+    if (org && org.name !== retiredName) {
+      await this.renameOrg(
+        orgId,
+        retiredName,
+      );
+    }
   }
 
   /**
@@ -479,6 +566,50 @@ export class GrafanaAdminService {
     );
 
     return true;
+  }
+
+  private async listJson<T>(
+    path: string,
+    action: string,
+    orgId?: number,
+  ): Promise<T[]> {
+    const response =
+      await this.request(
+        'GET',
+        path,
+        undefined,
+        orgId,
+      );
+
+    await this.assertOk(
+      response,
+      action,
+    );
+
+    return (await response.json()) as T[];
+  }
+
+  private async deleteIfPresent(
+    path: string,
+    action: string,
+    orgId?: number,
+  ): Promise<void> {
+    const response =
+      await this.request(
+        'DELETE',
+        path,
+        undefined,
+        orgId,
+      );
+
+    if (response.status === 404) {
+      return;
+    }
+
+    await this.assertOk(
+      response,
+      action,
+    );
   }
 
   private async ensureAdminMembership(

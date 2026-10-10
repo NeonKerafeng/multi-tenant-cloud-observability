@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 
 import { ConfigService } from '@nestjs/config';
 
@@ -21,11 +24,25 @@ import {
 export const DEFAULT_GRAFANA_ORG_ID = 1;
 
 /**
+ * Name of an org that Grafana refused to delete and that was emptied
+ * instead. Contains characters a tenant key cannot have, so it can never
+ * collide with a live tenant's org.
+ */
+export function retiredOrgName(
+  tenantKey: string,
+): string {
+  return `[deleted] ${tenantKey}`;
+}
+
+/**
  * Tenant <-> Grafana org mirror (decision D-01: one org per tenant).
  * Called only by the sync worker. Every step is idempotent.
  */
 @Injectable()
 export class TenantGrafanaService {
+  private readonly logger =
+    new Logger(TenantGrafanaService.name);
+
   constructor(
     private readonly tenants:
       TenantRepository,
@@ -79,6 +96,12 @@ export class TenantGrafanaService {
 
   /**
    * Deletes the tenant's org (dashboards included). Never org 1.
+   *
+   * If Grafana refuses the delete (Grafana 13 bug, see
+   * GrafanaAdminService.deleteOrg) the org is RETIRED instead: no members,
+   * no datasources, no dashboards, renamed "[deleted] <tenant>". That is
+   * the converged state for access; grafana_org_id is kept so the resync
+   * retries the real delete until Grafana accepts it, then clears it.
    */
   async removeOrg(
     tenant: TenantRecord,
@@ -90,30 +113,76 @@ export class TenantGrafanaService {
       return;
     }
 
-    /*
-     * Delete only if the stored id still names THIS tenant's org: after a
-     * Grafana rebuild the id may belong to another tenant now.
-     */
-    const org =
-      await this.grafana.getOrg(
-        tenant.grafanaOrgId,
-      );
+    const orgId =
+      await this.findOwnOrg(tenant);
 
-    if (org && org.name === tenant.tenantKey) {
-      await this.grafana.deleteOrg(
-        tenant.grafanaOrgId,
+    if (orgId === null) {
+      await this.tenants.clearGrafanaOrgId(
+        tenant.id,
       );
       return;
     }
 
-    const byName =
-      await this.grafana.findOrgByName(
-        tenant.tenantKey,
+    const result =
+      await this.grafana.deleteOrg(orgId);
+
+    if (result === 'deleted') {
+      this.logger.log(
+        `Deleted Grafana org ${orgId} of tenant ${tenant.tenantKey}`,
       );
 
-    if (byName && byName.id !== DEFAULT_GRAFANA_ORG_ID) {
-      await this.grafana.deleteOrg(byName.id);
+      await this.tenants.clearGrafanaOrgId(
+        tenant.id,
+      );
+      return;
     }
+
+    await this.grafana.retireOrg(
+      orgId,
+      retiredOrgName(tenant.tenantKey),
+    );
+
+    this.logger.warn(
+      `Grafana refused to delete org ${orgId} of tenant ${tenant.tenantKey}; ` +
+        'retired it (emptied + renamed), the resync will retry the delete',
+    );
+  }
+
+  /**
+   * The org that belongs to this tenant, by stored id when that org still
+   * carries the tenant's (live or retired) name, else by name. After a
+   * Grafana rebuild the stored id may belong to another tenant: never
+   * touch it then. Never returns org 1.
+   */
+  private async findOwnOrg(
+    tenant: TenantRecord,
+  ): Promise<number | null> {
+    const names = [
+      tenant.tenantKey,
+      retiredOrgName(tenant.tenantKey),
+    ];
+
+    const org =
+      tenant.grafanaOrgId === null
+        ? null
+        : await this.grafana.getOrg(
+            tenant.grafanaOrgId,
+          );
+
+    if (org && names.includes(org.name)) {
+      return org.id;
+    }
+
+    for (const name of names) {
+      const byName =
+        await this.grafana.findOrgByName(name);
+
+      if (byName && byName.id !== DEFAULT_GRAFANA_ORG_ID) {
+        return byName.id;
+      }
+    }
+
+    return null;
   }
 
   private async ensureOrg(
