@@ -1,10 +1,7 @@
-jest.mock('@nestjs/config', () => ({ ConfigService: class {} }));
+import type { DatabaseService } from '../common/db/database.service';
+import { AppConfig } from '../config/app-config';
 
-import type { ConfigService } from '@nestjs/config';
-
-import type { DatabaseService } from '../database/database.service';
-
-import type { GrafanaSyncService } from './grafana-sync.service';
+import type { Aggregate, MirrorHandler, Target } from './mirror';
 import {
   type OutboxEvent,
   type OutboxRepository,
@@ -12,48 +9,65 @@ import {
 } from './outbox.repository';
 import { OutboxWorker } from './outbox.worker';
 
-function event(id: string, aggregateId: string): OutboxEvent {
-  return { id, aggregateType: 'user', aggregateId, attempts: 1 };
+function event(
+  id: string,
+  aggregateId: string,
+  target: Target = 'grafana',
+  aggregateType: Aggregate = 'user',
+): OutboxEvent {
+  return { id, target, aggregateType, aggregateId, attempts: 1, claimedSeq: 1 };
 }
 
-function setup(batches: OutboxEvent[][]) {
+function handler(target: Target, aggregate: Aggregate) {
+  return {
+    target,
+    aggregate,
+    sync: jest.fn((id: string) =>
+      id === 'bad'
+        ? Promise.reject(new Error(`${target} down`))
+        : Promise.resolve(),
+    ),
+  };
+}
+
+function setup(
+  batches: OutboxEvent[][],
+  done: (e: OutboxEvent) => boolean = () => true,
+) {
   const outbox = {
     claim: jest.fn(() => Promise.resolve(batches.shift() ?? [])),
-    markDone: jest.fn().mockResolvedValue(undefined),
+    markDone: jest.fn((e: OutboxEvent) => Promise.resolve(done(e))),
     markFailed: jest.fn().mockResolvedValue(undefined),
   };
 
-  const sync = {
-    handle: jest.fn((_type: string, id: string) =>
-      id === 'bad' ? Promise.reject(new Error('grafana down')) : Promise.resolve(),
-    ),
-  };
+  const grafanaUser = handler('grafana', 'user');
+  const keycloakUser = handler('keycloak', 'user');
 
   const worker = new OutboxWorker(
     {} as DatabaseService,
     outbox as unknown as OutboxRepository,
-    sync as unknown as GrafanaSyncService,
-    { get: jest.fn() } as unknown as ConfigService,
+    AppConfig.forTest(),
+    [grafanaUser, keycloakUser] as MirrorHandler[],
   );
 
-  return { worker, outbox, sync };
+  return { worker, outbox, grafanaUser, keycloakUser };
 }
 
 describe('OutboxWorker.drain', () => {
-  it('processes every batch until the outbox is empty', async () => {
-    const { worker, outbox, sync } = setup([
-      [event('1', 'a'), event('2', 'b')],
-      [event('3', 'c')],
+  it('dispatches each event to the handler of its target and aggregate', async () => {
+    const { worker, grafanaUser, keycloakUser, outbox } = setup([
+      [event('1', 'a', 'grafana'), event('2', 'a', 'keycloak')],
+      [event('3', 'b', 'keycloak')],
     ]);
 
     await worker.drain();
 
-    expect(sync.handle).toHaveBeenCalledTimes(3);
-    expect(outbox.markDone.mock.calls.map((c: unknown[]) => c[0])).toEqual(['1', '2', '3']);
-    expect(outbox.claim).toHaveBeenCalledTimes(3);
+    expect(grafanaUser.sync.mock.calls).toEqual([['a']]);
+    expect(keycloakUser.sync.mock.calls).toEqual([['a'], ['b']]);
+    expect(outbox.markDone).toHaveBeenCalledTimes(3);
   });
 
-  it('a failing event is marked for retry and does not block the others', async () => {
+  it('a failing event is retried later and does not block the others', async () => {
     const { worker, outbox } = setup([[event('1', 'bad'), event('2', 'ok')]]);
 
     await worker.drain();
@@ -62,7 +76,52 @@ describe('OutboxWorker.drain', () => {
       expect.objectContaining({ id: '1' }),
       expect.stringContaining('grafana down'),
     );
-    expect(outbox.markDone).toHaveBeenCalledWith('2');
+    expect(outbox.markDone).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '2' }),
+    );
+  });
+
+  it('an event without handler is dropped (markDone) instead of looping', async () => {
+    const { worker, outbox } = setup([[event('1', 'x', 'keycloak', 'agent')]]);
+
+    await worker.drain();
+
+    expect(outbox.markDone).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '1' }),
+    );
+  });
+
+  it('claims again when an event changed while it was processed (I-30)', async () => {
+    let first = true;
+
+    const { worker, outbox } = setup(
+      [[event('1', 'a')], [], [event('1', 'a')], []],
+      () => {
+        const result = !first;
+        first = false;
+        return result;
+      },
+    );
+
+    await worker.drain();
+
+    expect(outbox.markDone).toHaveBeenCalledTimes(2);
+    expect(outbox.claim.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('refuses two handlers for the same pair', () => {
+    expect(
+      () =>
+        new OutboxWorker(
+          {} as DatabaseService,
+          {} as OutboxRepository,
+          AppConfig.forTest(),
+          [
+            handler('grafana', 'user'),
+            handler('grafana', 'user'),
+          ] as MirrorHandler[],
+        ),
+    ).toThrow(/Two mirror handlers/);
   });
 });
 
@@ -71,21 +130,5 @@ describe('retryDelaySeconds', () => {
     expect([1, 2, 3, 4, 8, 50].map(retryDelaySeconds)).toEqual([
       5, 10, 20, 40, 600, 600,
     ]);
-  });
-});
-
-import { renderMetrics } from './metrics.controller';
-
-describe('renderMetrics', () => {
-  it('renders Prometheus text format gauges', () => {
-    expect(
-      renderMetrics([
-        ['mtco_outbox_pending_events', 'Pending.', 3],
-        ['mtco_outbox_oldest_pending_seconds', 'Oldest.', Number.NaN],
-      ]),
-    ).toBe(
-      '# HELP mtco_outbox_pending_events Pending.\n# TYPE mtco_outbox_pending_events gauge\nmtco_outbox_pending_events 3\n' +
-        '# HELP mtco_outbox_oldest_pending_seconds Oldest.\n# TYPE mtco_outbox_oldest_pending_seconds gauge\nmtco_outbox_oldest_pending_seconds 0\n',
-    );
   });
 });

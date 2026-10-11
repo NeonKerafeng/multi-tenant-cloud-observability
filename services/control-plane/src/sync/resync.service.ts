@@ -1,46 +1,41 @@
 import {
   Injectable,
   Logger,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
 } from '@nestjs/common';
 
-import { ConfigService } from '@nestjs/config';
-
-import { DatabaseService } from '../database/database.service';
-import { TenantRepository } from '../tenants/tenant.repository';
-import { UserRepository } from '../users/user.repository';
+import { DatabaseService } from '../common/db/database.service';
+import { ConflictError } from '../common/errors/domain-error';
+import { AppConfig } from '../config/app-config';
+import { AgentRepository } from '../modules/agents/agent.repository';
+import { TenantRepository } from '../modules/tenants/tenant.repository';
+import { UserRepository } from '../modules/users/user.repository';
 
 import { OutboxRepository } from './outbox.repository';
 
-const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 const STARTUP_DELAY_MS = 15 * 1000;
 
 export interface ResyncResult {
   tenantsQueued: number;
   usersQueued: number;
+  agentsQueued: number;
 }
 
 /**
- * Slow safety net (default: at startup + every hour). It does not do the
- * sync itself; it only enqueues every tenant and user so the outbox worker
- * re-converges Grafana. It exists for changes made OUTSIDE control-plane
- * (manual edits, Grafana restored from backup / rebuilt on a new DB).
- *
- * The control-plane DB is the only source of truth: identities that exist
- * only in Keycloak are NOT imported (a user created directly in Keycloak
- * never gets Grafana access). The initial platform admin is created by
- * PlatformBootstrapService.
+ * Slow safety net (at startup + every GRAFANA_RESYNC_INTERVAL_MS, default
+ * 1 h): enqueues every row that is live or still holds a mirror pointer
+ * (pointer rule, CLAUDE.md §18.0) for ALL its mirrors. It repairs changes
+ * made outside control-plane (manual edits, Grafana/Keycloak restored or
+ * rebuilt) and finishes cleanups. The DB is the only source of truth:
+ * nothing is imported from Keycloak or Grafana.
  *
  * Data isolation never depends on this: query-gateway enforces tenancy
  * from the token on every request.
  */
 @Injectable()
-export class ResyncService
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
-  private readonly logger =
-    new Logger(ResyncService.name);
+export class ResyncService implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger(ResyncService.name);
 
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -50,14 +45,17 @@ export class ResyncService
     private readonly outbox: OutboxRepository,
     private readonly tenants: TenantRepository,
     private readonly users: UserRepository,
-    private readonly config: ConfigService,
+    private readonly agents: AgentRepository,
+    private readonly config: AppConfig,
   ) {}
 
   onApplicationBootstrap(): void {
-    const interval = this.intervalMs();
+    const interval = this.config.resyncIntervalMs;
 
     if (interval <= 0) {
-      this.logger.log('Periodic resync disabled (GRAFANA_RESYNC_INTERVAL_MS=0)');
+      this.logger.log(
+        'Periodic resync disabled (GRAFANA_RESYNC_INTERVAL_MS=0)',
+      );
       return;
     }
 
@@ -73,77 +71,49 @@ export class ResyncService
 
   async run(): Promise<ResyncResult> {
     if (this.running) {
-      throw new Error('Resync already running');
+      throw new ConflictError('resync_running', 'A resync is already running');
     }
 
     this.running = true;
 
     try {
-      let tenantsQueued = 0;
+      const tenantIds = await this.tenants.findIdsForResync();
+      const userIds = await this.users.findIdsForResync();
+      const agentIds = await this.agents.findIdsForResync();
 
-      for (const tenant of await this.tenants.findAll()) {
-        if (
-          tenant.status === 'active' ||
-          tenant.status === 'deleting'
-        ) {
-          await this.outbox.enqueue(this.db, 'tenant', tenant.id);
-          tenantsQueued++;
-        }
+      for (const id of tenantIds) {
+        await this.outbox.enqueue(this.db, 'tenant', id);
       }
 
-      /*
-       * Deleted tenants whose Grafana org could not be deleted yet
-       * (Grafana bug, see TenantGrafanaService.removeOrg): retried here
-       * until Grafana accepts the delete.
-       */
-      for (const tenantId of await this.tenants.findIdsWithLeftoverGrafanaOrg()) {
-        await this.outbox.enqueue(this.db, 'tenant', tenantId);
-        tenantsQueued++;
+      for (const id of userIds) {
+        await this.outbox.enqueue(this.db, 'user', id);
       }
 
-      const userIds = await this.users.findIdsForSync();
-
-      for (const userId of userIds) {
-        await this.outbox.enqueue(this.db, 'user', userId);
+      for (const id of agentIds) {
+        await this.outbox.enqueue(this.db, 'agent', id);
       }
 
       this.logger.log(
-        `Resync queued ${tenantsQueued} tenant(s), ${userIds.length} user(s)`,
+        `Resync queued ${tenantIds.length} tenant(s), ${userIds.length} user(s), ${agentIds.length} agent(s)`,
       );
 
       return {
-        tenantsQueued,
+        tenantsQueued: tenantIds.length,
         usersQueued: userIds.length,
+        agentsQueued: agentIds.length,
       };
     } finally {
       this.running = false;
     }
   }
 
-  private schedule(
-    delayMs: number,
-    intervalMs: number,
-  ): void {
+  private schedule(delayMs: number, intervalMs: number): void {
     this.timer = setTimeout(() => {
-      void this.run()
-        .catch((error) =>
-          this.logger.warn(`Resync failed: ${String(error)}`),
-        )
+      this.run()
+        .catch((error) => this.logger.warn(`Resync failed: ${String(error)}`))
         .finally(() => this.schedule(intervalMs, intervalMs));
     }, delayMs);
 
     this.timer.unref();
-  }
-
-  private intervalMs(): number {
-    const raw = this.config.get<string>('GRAFANA_RESYNC_INTERVAL_MS');
-
-    if (raw === undefined || raw === '') {
-      return DEFAULT_INTERVAL_MS;
-    }
-
-    const value = Number(raw);
-
-    return Number.isFinite(value) ? value : DEFAULT_INTERVAL_MS;
   }
 }

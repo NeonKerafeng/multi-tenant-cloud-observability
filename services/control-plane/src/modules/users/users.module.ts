@@ -1,0 +1,14 @@
+import { Module } from '@nestjs/common';
+
+import { MirrorsModule } from '../../mirrors/mirrors.module';
+
+import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
+
+@Module({
+  imports: [MirrorsModule],
+  controllers: [UsersController],
+  providers: [UsersService],
+  exports: [UsersService],
+})
+export class UsersModule {}

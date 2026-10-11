@@ -836,6 +836,24 @@ spec:
 
 
               # ========================================
+              # User profile: admin-managed custom attributes
+              # ========================================
+
+              # control-plane marks the Keycloak accounts it manages with the
+              # attribute mtco_user_id (TODO-23 v0.7). Keycloak >= 24 drops
+              # attributes that the declarative user profile does not allow;
+              # ADMIN_EDIT lets the admin API read/write them while users can
+              # neither see nor edit them. kcadm update = GET, merge, PUT.
+              echo "Allowing admin-managed unmanaged user attributes..."
+
+              $KCADM update users/profile \
+                -r "$REALM" \
+                -s unmanagedAttributePolicy=ADMIN_EDIT
+
+              echo "User profile unmanagedAttributePolicy=ADMIN_EDIT."
+
+
+              # ========================================
               # Done
               # ========================================
 

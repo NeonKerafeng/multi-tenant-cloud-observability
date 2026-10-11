@@ -1,46 +1,38 @@
 import {
+  Inject,
   Injectable,
   Logger,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
 } from '@nestjs/common';
-
-import { ConfigService } from '@nestjs/config';
 
 import type { PoolClient } from 'pg';
 
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService } from '../common/db/database.service';
+import { AppConfig } from '../config/app-config';
 
-import { GrafanaSyncService } from './grafana-sync.service';
-
-import {
-  type OutboxEvent,
-  OutboxRepository,
-} from './outbox.repository';
+import { MIRROR_HANDLERS, type MirrorHandler } from './mirror';
+import { type OutboxEvent, OutboxRepository } from './outbox.repository';
 
 const BATCH_SIZE = 20;
-const DEFAULT_POLL_MS = 5000;
 const LISTENER_RETRY_MS = 5000;
 const PURGE_EVERY_MS = 60 * 60 * 1000;
 
 /**
- * Drains the outbox.
- *
- * - Event-driven: LISTEN outbox_new wakes it the moment an event is
- *   committed (trigger in migration 003).
- * - A short poll is the fallback for retries (next_attempt_at) and for a
- *   lost LISTEN connection.
- * - Safe with several control-plane replicas: events are claimed with
- *   FOR UPDATE SKIP LOCKED + a lease.
- * - A failing event never blocks the others; it is retried with backoff
- *   and visible in GET /sync/status.
+ * Drains the outbox and dispatches each event to the MirrorHandler of its
+ * (target, aggregate).
+ * - Event-driven: LISTEN outbox_new (trigger from migration 003); a short
+ *   poll covers retries (next_attempt_at) and a lost LISTEN connection.
+ * - Multi-replica safe: FOR UPDATE SKIP LOCKED + lease.
+ * - A failing event never blocks the others (retry with backoff, visible in
+ *   GET /sync/status and /metrics).
+ * - An event re-enqueued while it ran is run again at once (I-30).
  */
 @Injectable()
-export class OutboxWorker
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
-  private readonly logger =
-    new Logger(OutboxWorker.name);
+export class OutboxWorker implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger(OutboxWorker.name);
+
+  private readonly handlers = new Map<string, MirrorHandler>();
 
   private listener: PoolClient | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -53,14 +45,22 @@ export class OutboxWorker
   constructor(
     private readonly db: DatabaseService,
     private readonly outbox: OutboxRepository,
-    private readonly sync: GrafanaSyncService,
-    private readonly config: ConfigService,
-  ) {}
+    private readonly config: AppConfig,
+    @Inject(MIRROR_HANDLERS) handlers: MirrorHandler[],
+  ) {
+    for (const handler of handlers) {
+      const key = `${handler.target}:${handler.aggregate}`;
+
+      if (this.handlers.has(key)) {
+        throw new Error(`Two mirror handlers for ${key}`);
+      }
+
+      this.handlers.set(key, handler);
+    }
+  }
 
   onApplicationBootstrap(): void {
-    if (
-      this.config.get<string>('OUTBOX_WORKER_ENABLED') === 'false'
-    ) {
+    if (!this.config.outbox.workerEnabled) {
       this.logger.log('Outbox worker disabled');
       return;
     }
@@ -69,14 +69,12 @@ export class OutboxWorker
 
     this.pollTimer = setInterval(
       () => this.kick(),
-      Number(
-        this.config.get<string>('OUTBOX_POLL_MS') ?? DEFAULT_POLL_MS,
-      ) || DEFAULT_POLL_MS,
+      this.config.outbox.pollMs || 5000,
     );
     this.pollTimer.unref();
 
     this.purgeTimer = setInterval(() => {
-      void this.outbox
+      this.outbox
         .purgeProcessed()
         .catch((error) =>
           this.logger.warn(`Outbox purge failed: ${String(error)}`),
@@ -136,24 +134,31 @@ export class OutboxWorker
     }
   }
 
-  private async process(
-    event: OutboxEvent,
-  ): Promise<void> {
-    try {
-      await this.sync.handle(
-        event.aggregateType,
-        event.aggregateId,
-      );
+  private async process(event: OutboxEvent): Promise<void> {
+    const handler = this.handlers.get(`${event.target}:${event.aggregateType}`);
 
-      await this.outbox.markDone(event.id);
+    if (!handler) {
+      this.logger.warn(
+        `No mirror for ${event.target}:${event.aggregateType}; dropping event ${event.id}`,
+      );
+      await this.outbox.markDone(event);
+      return;
+    }
+
+    try {
+      await handler.sync(event.aggregateId);
     } catch (error) {
       this.logger.warn(
-        `Sync ${event.aggregateType} ${event.aggregateId} failed (attempt ${event.attempts}): ${String(error)}`,
+        `Sync ${event.target} ${event.aggregateType} ${event.aggregateId} failed (attempt ${event.attempts}): ${String(error)}`,
       );
 
-      await this.outbox
-        .markFailed(event, String(error))
-        .catch(() => undefined);
+      await this.outbox.markFailed(event, String(error)).catch(() => undefined);
+      return;
+    }
+
+    if (!(await this.outbox.markDone(event))) {
+      // Changed again while it was being synced: run it again now.
+      this.rerun = true;
     }
   }
 
@@ -163,8 +168,7 @@ export class OutboxWorker
     }
 
     try {
-      const client =
-        await this.db.connectListener();
+      const client = await this.db.connectListener();
 
       client.on('notification', () => this.kick());
 

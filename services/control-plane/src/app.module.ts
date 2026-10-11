@@ -1,27 +1,37 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 
-import { AgentsModule } from './agents/agents.module';
-import { DatabaseModule } from './database/database.module';
-import { EnrollmentsModule } from './enrollments/enrollments.module';
-import { KeycloakModule } from './keycloak/keycloak.module';
+import { AuthGuard } from './common/auth/auth.guard';
+import { CommonModule } from './common/common.module';
+import { PersistenceModule } from './common/db/persistence.module';
+import { ErrorFilter } from './common/errors/error.filter';
+import { HealthController } from './common/health/health.controller';
+import { ConfigModule } from './config/config.module';
+import { AgentsModule } from './modules/agents/agents.module';
+import { EnrollmentsModule } from './modules/enrollments/enrollments.module';
+import { PlatformModule } from './modules/platform/platform.module';
+import { SupportAccessModule } from './modules/support-access/support-access.module';
+import { TenantsModule } from './modules/tenants/tenants.module';
+import { UsersModule } from './modules/users/users.module';
 import { SyncModule } from './sync/sync.module';
-import { TenantsModule } from './tenants/tenants.module';
-import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-    }),
-
-    DatabaseModule,
-    KeycloakModule,
-    AgentsModule,
-    EnrollmentsModule,
+    ConfigModule,
+    CommonModule,
+    PersistenceModule,
     TenantsModule,
     UsersModule,
+    AgentsModule,
+    EnrollmentsModule,
+    SupportAccessModule,
+    PlatformModule,
     SyncModule,
+  ],
+  controllers: [HealthController],
+  providers: [
+    { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_FILTER, useClass: ErrorFilter },
   ],
 })
 export class AppModule {}

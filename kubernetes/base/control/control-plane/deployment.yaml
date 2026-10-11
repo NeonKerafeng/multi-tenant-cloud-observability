@@ -89,13 +89,23 @@ spec:
             - name: http
               containerPort: 8080
 
-          # Ready only once Nest listens (after the outbox worker started),
-          # so a rollout replaces the old pod only after the new one is up.
+          # Ready = Nest listens AND its DB answers. A rollout replaces the
+          # old pod only after the new one is ready. Keycloak/Grafana are NOT
+          # part of readiness (their outages show as 503s and outbox backlog).
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /readyz
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
 
           env:
             - name: PORT
@@ -221,7 +231,7 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 512M
+              memory: 512Mi
 
       volumes:
         - name: migrations
