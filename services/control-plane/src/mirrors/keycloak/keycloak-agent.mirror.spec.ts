@@ -1,9 +1,24 @@
 import { agent, IDS } from '../../common/testing/fixtures';
 import type { KeycloakClient } from '../../integrations/keycloak/keycloak.client';
-import type { KcClient } from '../../integrations/keycloak/keycloak.types';
+import type {
+  KcClient,
+  KcProtocolMapper,
+} from '../../integrations/keycloak/keycloak.types';
 import type { AgentRepository } from '../../modules/agents/agent.repository';
 
-import { KeycloakAgentMirror } from './keycloak-agent.mirror';
+import {
+  KeycloakAgentMirror,
+  LEGACY_AGENT_MAPPERS,
+} from './keycloak-agent.mirror';
+
+const SCOPE = { id: 'scope-1', name: 'mtco-agent' };
+const BASIC = { id: 'scope-basic', name: 'basic' };
+
+const CONVERGED_ATTRIBUTES = {
+  agent_id: [IDS.agent],
+  tenant_id: ['alpha-tenant'],
+  vm_account_id: ['2'],
+};
 
 function client(overrides: Partial<KcClient> = {}): KcClient {
   return {
@@ -15,7 +30,25 @@ function client(overrides: Partial<KcClient> = {}): KcClient {
   };
 }
 
-function setup(found: KcClient | null) {
+function legacyMappers(): KcProtocolMapper[] {
+  return LEGACY_AGENT_MAPPERS.map((name, i) => ({
+    id: `m${i}`,
+    name,
+    protocol: 'openid-connect',
+    protocolMapper: 'x',
+    config: {},
+  }));
+}
+
+function setup(
+  found: KcClient | null,
+  opts: {
+    scopes?: { id: string; name: string }[];
+    mappers?: KcProtocolMapper[];
+    attributes?: Record<string, string[]> | null;
+    realmScope?: { id: string; name: string } | null;
+  } = {},
+) {
   const keycloak = {
     getClient: jest.fn().mockResolvedValue(found),
     findClient: jest.fn().mockResolvedValue(found),
@@ -25,11 +58,21 @@ function setup(found: KcClient | null) {
     getServiceAccountUser: jest.fn().mockResolvedValue({
       id: 'sa',
       username: 'service-account-x',
-      attributes: null,
+      attributes:
+        opts.attributes === undefined ? CONVERGED_ATTRIBUTES : opts.attributes,
     }),
     updateUser: jest.fn().mockResolvedValue(undefined),
-    getProtocolMappers: jest.fn().mockResolvedValue([{ name: 'agent-id' }]),
-    createProtocolMapper: jest.fn().mockResolvedValue(undefined),
+    getClientDefaultScopes: jest
+      .fn()
+      .mockResolvedValue(opts.scopes ?? [BASIC, SCOPE]),
+    findClientScope: jest
+      .fn()
+      .mockResolvedValue(
+        opts.realmScope === undefined ? SCOPE : opts.realmScope,
+      ),
+    addClientDefaultScope: jest.fn().mockResolvedValue(undefined),
+    getProtocolMappers: jest.fn().mockResolvedValue(opts.mappers ?? []),
+    deleteProtocolMapper: jest.fn().mockResolvedValue(undefined),
     getClientSecret: jest.fn().mockResolvedValue('s3cret'),
   };
 
@@ -54,12 +97,74 @@ describe('KeycloakAgentMirror.apply', () => {
     );
   });
 
-  it('active and converged → no write', async () => {
+  it('active and converged → no write at all', async () => {
     const { mirror, keycloak } = setup(client());
 
     await mirror.apply(agent());
 
     expect(keycloak.updateClient).not.toHaveBeenCalled();
+    expect(keycloak.updateUser).not.toHaveBeenCalled();
+    expect(keycloak.addClientDefaultScope).not.toHaveBeenCalled();
+    expect(keycloak.deleteProtocolMapper).not.toHaveBeenCalled();
+  });
+
+  it('legacy client (v0.6–v0.8): scope added FIRST, then the 4 per-client mappers deleted', async () => {
+    const { mirror, keycloak } = setup(client(), {
+      scopes: [BASIC],
+      mappers: [
+        ...legacyMappers(),
+        {
+          id: 'other',
+          name: 'something-else',
+          protocol: 'p',
+          protocolMapper: 'x',
+          config: {},
+        },
+      ],
+    });
+
+    await mirror.apply(agent());
+
+    expect(keycloak.addClientDefaultScope).toHaveBeenCalledWith(
+      'client-uuid',
+      'scope-1',
+    );
+    expect(
+      keycloak.deleteProtocolMapper.mock.calls.map((c: unknown[]) => c[1]),
+    ).toEqual(['m0', 'm1', 'm2', 'm3']);
+
+    const scopeOrder =
+      keycloak.addClientDefaultScope.mock.invocationCallOrder[0];
+    const firstDelete =
+      keycloak.deleteProtocolMapper.mock.invocationCallOrder[0];
+
+    expect(scopeOrder).toBeLessThan(firstDelete);
+  });
+
+  it('missing realm scope → upstream error (outbox retries), mappers untouched', async () => {
+    const { mirror, keycloak } = setup(client(), {
+      scopes: [BASIC],
+      mappers: legacyMappers(),
+      realmScope: null,
+    });
+
+    await expect(mirror.apply(agent())).rejects.toMatchObject({
+      code: 'upstream_bad_response',
+    });
+    expect(keycloak.deleteProtocolMapper).not.toHaveBeenCalled();
+  });
+
+  it('looks the scope id up once, again after an error', async () => {
+    const { mirror, keycloak } = setup(client(), { scopes: [BASIC] });
+
+    await mirror.apply(agent());
+    await mirror.apply(agent());
+    expect(keycloak.findClientScope).toHaveBeenCalledTimes(1);
+
+    keycloak.addClientDefaultScope.mockRejectedValueOnce(new Error('404'));
+    await expect(mirror.apply(agent())).rejects.toThrow('404');
+    await mirror.apply(agent());
+    expect(keycloak.findClientScope).toHaveBeenCalledTimes(2);
   });
 
   it('revoked → client deleted, pointer cleared', async () => {
@@ -84,8 +189,11 @@ describe('KeycloakAgentMirror.apply', () => {
 });
 
 describe('KeycloakAgentMirror.issueCredentials', () => {
-  it('creates the client, sets the FROZEN service-account attributes and mappers, returns the secret', async () => {
-    const { mirror, keycloak, agents } = setup(null);
+  it('creates the client, sets the FROZEN service-account attributes, adds the scope, returns the secret', async () => {
+    const { mirror, keycloak, agents } = setup(null, {
+      scopes: [BASIC],
+      attributes: null,
+    });
 
     const credentials = await mirror.issueCredentials(
       agent({ clientUuid: null, status: 'provisioning' }),
@@ -99,21 +207,16 @@ describe('KeycloakAgentMirror.issueCredentials', () => {
         standardFlowEnabled: false,
       }),
     );
-    expect(keycloak.updateUser).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'sa',
-        attributes: {
-          agent_id: [IDS.agent],
-          tenant_id: ['alpha-tenant'],
-          vm_account_id: ['2'],
-        },
-      }),
-    );
     expect(
-      (
-        keycloak.createProtocolMapper.mock.calls as [string, { name: string }][]
-      ).map(([, mapper]) => mapper.name),
-    ).toEqual(['otel-gateway-audience', 'tenant-id', 'vm-account-id']);
+      (keycloak.createClient.mock.calls as unknown[][])[0][0],
+    ).not.toHaveProperty('defaultClientScopes');
+    expect(keycloak.updateUser).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sa', attributes: CONVERGED_ATTRIBUTES }),
+    );
+    expect(keycloak.addClientDefaultScope).toHaveBeenCalledWith(
+      'client-new',
+      'scope-1',
+    );
     expect(agents.setClientUuid).toHaveBeenCalledWith(
       IDS.agent,
       'client-new',
@@ -126,11 +229,12 @@ describe('KeycloakAgentMirror.issueCredentials', () => {
     });
   });
 
-  it('is idempotent: reuses an existing client', async () => {
+  it('is idempotent: a retried exchange reuses the existing client of the same agent id', async () => {
     const { mirror, keycloak } = setup(client());
 
     await mirror.issueCredentials(agent());
 
     expect(keycloak.createClient).not.toHaveBeenCalled();
+    expect(keycloak.addClientDefaultScope).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import { AppConfig } from '../../config/app-config';
 
 import type {
   KcClient,
+  KcClientScope,
   KcGroup,
   KcProtocolMapper,
   KcRole,
@@ -390,6 +391,71 @@ export class KeycloakClient extends UpstreamClient {
       method: 'POST',
       path: `${this.admin}/clients/${encodeURIComponent(uuid)}/protocol-mappers/models`,
       body: mapper,
+    });
+  }
+
+  async deleteProtocolMapper(uuid: string, mapperId: string): Promise<void> {
+    await this.request({
+      method: 'DELETE',
+      path: `${this.admin}/clients/${encodeURIComponent(uuid)}/protocol-mappers/models/${encodeURIComponent(mapperId)}`,
+      accept: [404],
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Client scopes (v0.9: the shared agent claims, scope mtco-agent)
+  // ------------------------------------------------------------------
+
+  async findClientScope(name: string): Promise<KcClientScope | null> {
+    const scopes = await this.json<KcClientScope[]>({
+      method: 'GET',
+      path: `${this.admin}/client-scopes`,
+    });
+
+    return scopes.find((scope) => scope.name === name) ?? null;
+  }
+
+  getClientDefaultScopes(uuid: string): Promise<KcClientScope[]> {
+    return this.json<KcClientScope[]>({
+      method: 'GET',
+      path: `${this.admin}/clients/${encodeURIComponent(uuid)}/default-client-scopes`,
+    });
+  }
+
+  async addClientDefaultScope(uuid: string, scopeId: string): Promise<void> {
+    await this.request({
+      method: 'PUT',
+      path: `${this.admin}/clients/${encodeURIComponent(uuid)}/default-client-scopes/${encodeURIComponent(scopeId)}`,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Listings for the garbage collector (paged, full representations)
+  // ------------------------------------------------------------------
+
+  listUsers(first: number, max: number): Promise<KcUser[]> {
+    return this.json<KcUser[]>({
+      method: 'GET',
+      path: `${this.admin}/users`,
+      query: { first, max, briefRepresentation: false },
+    });
+  }
+
+  /** Top-level groups (tenant groups are top-level). */
+  listGroups(first: number, max: number): Promise<KcGroup[]> {
+    return this.json<KcGroup[]>({
+      method: 'GET',
+      path: `${this.admin}/groups`,
+      query: { first, max, briefRepresentation: false },
+    });
+  }
+
+  /** Clients whose clientId CONTAINS `search` (filter the prefix yourself). */
+  listClients(search: string, first: number, max: number): Promise<KcClient[]> {
+    return this.json<KcClient[]>({
+      method: 'GET',
+      path: `${this.admin}/clients`,
+      query: { clientId: search, search: true, first, max },
     });
   }
 }

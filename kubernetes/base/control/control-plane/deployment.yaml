@@ -4,7 +4,10 @@ metadata:
   name: control-plane
 
 spec:
-  replicas: 1
+  # Two replicas (TODO-23 v0.9): enrollments live in the DB, the outbox
+  # worker and the support-access sweeper claim rows with SKIP LOCKED, the
+  # initial platform admin is created under an advisory lock.
+  replicas: 2
 
   selector:
     matchLabels:
@@ -16,6 +19,14 @@ spec:
         app: control-plane
 
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: control-plane
+
       # Schema migrations run here, before the app starts, in file order.
       # schema_migrations records what ran; an advisory lock serializes
       # concurrent pods (rolling update, several replicas). Adding a .sql file

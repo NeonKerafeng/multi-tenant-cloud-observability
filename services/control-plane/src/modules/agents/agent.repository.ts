@@ -40,8 +40,11 @@ const SELECT = `
   JOIN tenants t ON t.id = a.tenant_id
 `;
 
+/** Keycloak clientId prefix of agents (our namespace in the realm). */
+export const AGENT_CLIENT_PREFIX = 'otel-agent-';
+
 export function agentClientId(agentId: string): string {
-  return `otel-agent-${agentId}`;
+  return `${AGENT_CLIENT_PREFIX}${agentId}`;
 }
 
 @Injectable()
@@ -67,11 +70,23 @@ export class AgentRepository extends BaseRepository<AgentRow, AgentRecord> {
 
   async insert(
     q: Queryable,
-    agent: { id: string; tenantId: string; status: AgentStatus },
+    agent: {
+      id: string;
+      tenantId: string;
+      status: AgentStatus;
+      enrollmentId: string | null;
+    },
   ): Promise<AgentRecord> {
     await this.exec(
-      `INSERT INTO agents (id, tenant_id, keycloak_client_id, status) VALUES ($1, $2, $3, $4)`,
-      [agent.id, agent.tenantId, agentClientId(agent.id), agent.status],
+      `INSERT INTO agents (id, tenant_id, keycloak_client_id, status, enrollment_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        agent.id,
+        agent.tenantId,
+        agentClientId(agent.id),
+        agent.status,
+        agent.enrollmentId,
+      ],
       q,
     );
 
@@ -119,6 +134,11 @@ export class AgentRepository extends BaseRepository<AgentRow, AgentRecord> {
       [id, clientUuid],
       q,
     );
+  }
+
+  /** Ids of agents that must keep their Keycloak client (GC). */
+  liveIds(): Promise<string[]> {
+    return this.ids(`SELECT id FROM agents WHERE status <> 'revoked'`);
   }
 
   /** Pointer rule: live agents + revoked ones whose client is not deleted yet. */

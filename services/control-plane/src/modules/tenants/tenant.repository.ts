@@ -106,6 +106,18 @@ export class TenantRepository extends BaseRepository<TenantRow, TenantRecord> {
    * still hold a mirror pointer (cleanup not finished, e.g. a retired
    * Grafana org that Grafana refused to delete).
    */
+  /** The ids among `ids` whose tenant is active (Keycloak GC). */
+  findActiveIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    return this.ids(
+      `SELECT id FROM tenants WHERE status = 'active' AND id = ANY($1::uuid[])`,
+      [ids],
+    );
+  }
+
   findIdsForResync(): Promise<string[]> {
     return this.ids(
       `SELECT id FROM tenants

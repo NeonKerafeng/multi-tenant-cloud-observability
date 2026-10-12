@@ -44,19 +44,25 @@ function setup(found: AgentRecord | null = agent()) {
     keycloakAgents as unknown as KeycloakAgentMirror,
   );
 
-  return { service, agents, outbox, keycloakAgents, tx };
+  return { service, agents, outbox, keycloakAgents, tx, db };
 }
 
 describe('AgentsService', () => {
-  it('issue: row (provisioning) + credentials inline + active + outbox, secret returned once', async () => {
-    const { service, agents, keycloakAgents, outbox, tx } = setup();
+  it("issue (in the exchange's transaction): row with the enrollment's agent id + credentials + active + outbox, secret returned once", async () => {
+    const { service, agents, keycloakAgents, outbox, tx, db } = setup();
 
-    const issued = await service.issue(tenant());
+    const issued = await service.issue(tx, tenant(), {
+      agentId: IDS.agent,
+      enrollmentId: 'enrollment-1',
+    });
 
-    expect(agents.insert).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({ tenantId: IDS.alpha, status: 'provisioning' }),
-    );
+    expect(agents.insert).toHaveBeenCalledWith(tx, {
+      id: IDS.agent,
+      tenantId: IDS.alpha,
+      status: 'provisioning',
+      enrollmentId: 'enrollment-1',
+    });
+    expect(db.transaction).not.toHaveBeenCalled();
     expect(keycloakAgents.issueCredentials).toHaveBeenCalled();
     expect(agents.setStatus).toHaveBeenCalledWith(
       tx,

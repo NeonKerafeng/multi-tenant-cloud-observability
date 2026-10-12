@@ -1,3 +1,4 @@
+import type { DatabaseService } from '../../common/db/database.service';
 import { user } from '../../common/testing/fixtures';
 import { AppConfig } from '../../config/app-config';
 import type { UserRecord, UserRepository } from '../users/user.repository';
@@ -17,7 +18,17 @@ function setup(opts: {
   admin?: Partial<typeof ADMIN>;
   activeAdmins?: number;
   known?: UserRecord | null;
+  lockHeldElsewhere?: boolean;
 }) {
+  const db = {
+    withAdvisoryLock: jest.fn(
+      async (_key: number, fn: () => Promise<unknown>) =>
+        opts.lockHeldElsewhere
+          ? { acquired: false }
+          : { acquired: true, result: await fn() },
+    ),
+  };
+
   const users = {
     countActivePlatformAdmins: jest
       .fn()
@@ -30,12 +41,13 @@ function setup(opts: {
   };
 
   const service = new PlatformBootstrapService(
+    db as unknown as DatabaseService,
     users as unknown as UserRepository,
     usersService as unknown as UsersService,
     AppConfig.forTest({ platformAdmin: { ...ADMIN, ...opts.admin } }),
   );
 
-  return { service, users, usersService };
+  return { service, users, usersService, db };
 }
 
 describe('PlatformBootstrapService.run', () => {
@@ -53,6 +65,17 @@ describe('PlatformBootstrapService.run', () => {
     const { service, usersService } = setup({ activeAdmins: 1 });
 
     await expect(service.run()).resolves.toBe('exists');
+    expect(usersService.createPlatformAdmin).not.toHaveBeenCalled();
+  });
+
+  it('another replica holds the lock → busy, nothing created (retried later)', async () => {
+    const { service, usersService, db } = setup({ lockHeldElsewhere: true });
+
+    await expect(service.run()).resolves.toBe('busy');
+    expect(db.withAdvisoryLock).toHaveBeenCalledWith(
+      727002,
+      expect.any(Function),
+    );
     expect(usersService.createPlatformAdmin).not.toHaveBeenCalled();
   });
 

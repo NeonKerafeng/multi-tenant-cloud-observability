@@ -5,6 +5,7 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 
+import { DatabaseService } from '../../common/db/database.service';
 import { AppConfig } from '../../config/app-config';
 import { UserRepository } from '../users/user.repository';
 import { UsersService } from '../users/users.service';
@@ -12,6 +13,12 @@ import { UsersService } from '../users/users.service';
 const FIRST_RETRY_MS = 5000;
 const MAX_RETRY_MS = 60 * 1000;
 const MIN_PASSWORD_LENGTH = 12;
+
+/** pg advisory lock: one replica at a time creates the initial admin. */
+export const PLATFORM_BOOTSTRAP_LOCK = 727002;
+
+export type BootstrapOutcome =
+  'skipped' | 'exists' | 'created' | 'refused' | 'busy';
 
 /**
  * Makes a fresh install usable with NO manual step: if the DB has no
@@ -22,7 +29,9 @@ const MIN_PASSWORD_LENGTH = 12;
  * mirror through the startup resync.
  *
  * Safety: a deleted initial admin is never resurrected; a username that
- * belongs to a tenant user is never promoted.
+ * belongs to a tenant user is never promoted. With several replicas only
+ * the one holding the advisory lock acts; the others retry and then see
+ * the admin.
  */
 @Injectable()
 export class PlatformBootstrapService
@@ -34,6 +43,7 @@ export class PlatformBootstrapService
   private stopped = false;
 
   constructor(
+    private readonly db: DatabaseService,
     private readonly users: UserRepository,
     private readonly usersService: UsersService,
     private readonly config: AppConfig,
@@ -53,9 +63,8 @@ export class PlatformBootstrapService
   }
 
   /** Returns what it did (for logs and tests). */
-  async run(): Promise<'skipped' | 'exists' | 'created' | 'refused'> {
-    const admin = this.config.platformAdmin;
-    const username = admin.username.trim().toLowerCase();
+  async run(): Promise<BootstrapOutcome> {
+    const username = this.config.platformAdmin.username.trim().toLowerCase();
 
     if (!username) {
       this.logger.log(
@@ -63,6 +72,16 @@ export class PlatformBootstrapService
       );
       return 'skipped';
     }
+
+    const locked = await this.db.withAdvisoryLock(PLATFORM_BOOTSTRAP_LOCK, () =>
+      this.createIfMissing(username),
+    );
+
+    return locked.acquired ? locked.result : 'busy';
+  }
+
+  private async createIfMissing(username: string): Promise<BootstrapOutcome> {
+    const admin = this.config.platformAdmin;
 
     if ((await this.users.countActivePlatformAdmins()) > 0) {
       return 'exists';
@@ -111,7 +130,17 @@ export class PlatformBootstrapService
 
     this.timer = setTimeout(() => {
       this.run()
-        .then(() => this.logger.log('Platform bootstrap complete'))
+        .then((outcome) => {
+          if (outcome === 'busy') {
+            this.logger.log(
+              'Another replica is running the platform bootstrap; checking again shortly',
+            );
+            this.schedule(FIRST_RETRY_MS, attempt + 1);
+            return;
+          }
+
+          this.logger.log('Platform bootstrap complete');
+        })
         .catch((error) => {
           const next = Math.min(
             FIRST_RETRY_MS * 2 ** (attempt - 1),

@@ -4,6 +4,7 @@ import { AppConfig } from '../../config/app-config';
 import type { KeycloakTenantMirror } from '../../mirrors/keycloak/keycloak-tenant.mirror';
 import type { OutboxRepository } from '../../sync/outbox.repository';
 import type { AgentRepository } from '../agents/agent.repository';
+import type { EnrollmentRepository } from '../enrollments/enrollment.repository';
 import type { SupportAccessRepository } from '../support-access/support-access.repository';
 import type { UserRepository } from '../users/user.repository';
 
@@ -39,6 +40,9 @@ function setup(opts: { insertError?: unknown } = {}) {
   const grants = {
     revokeOpenForTenant: jest.fn().mockResolvedValue(['u2', 'admin1']),
   };
+  const enrollments = {
+    revokeOpenForTenant: jest.fn().mockResolvedValue(1),
+  };
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const keycloakTenants = { apply: jest.fn().mockResolvedValue(undefined) };
 
@@ -48,6 +52,7 @@ function setup(opts: { insertError?: unknown } = {}) {
     users as unknown as UserRepository,
     agents as unknown as AgentRepository,
     grants as unknown as SupportAccessRepository,
+    enrollments as unknown as EnrollmentRepository,
     outbox as unknown as OutboxRepository,
     keycloakTenants as unknown as KeycloakTenantMirror,
     AppConfig.forTest(),
@@ -59,6 +64,7 @@ function setup(opts: { insertError?: unknown } = {}) {
     users,
     agents,
     grants,
+    enrollments,
     outbox,
     keycloakTenants,
     tx,
@@ -99,8 +105,9 @@ describe('TenantsService.create', () => {
 });
 
 describe('TenantsService.delete', () => {
-  it('cascades users, agents (Q1) and grants in one transaction and enqueues each once', async () => {
-    const { service, tenants, users, agents, grants, outbox, tx } = setup();
+  it('cascades users, agents (Q1), grants and unused enrollments in one transaction and enqueues each once', async () => {
+    const { service, tenants, users, agents, grants, enrollments, outbox, tx } =
+      setup();
 
     await service.delete(ACTORS.platformAdmin, tenant());
 
@@ -111,6 +118,11 @@ describe('TenantsService.delete', () => {
       tx,
       IDS.alpha,
       'root-admin',
+    );
+    expect(enrollments.revokeOpenForTenant).toHaveBeenCalledWith(
+      tx,
+      IDS.alpha,
+      IDS.platformAdmin,
     );
     expect(
       outbox.enqueue.mock.calls.map(

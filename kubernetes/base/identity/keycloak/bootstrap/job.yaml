@@ -836,6 +836,104 @@ spec:
 
 
               # ========================================
+              # Agent client scope (TODO-23 v0.9)
+              # ========================================
+
+              # control-plane adds this scope to the DEFAULT client scopes of
+              # every agent client (otel-agent-<id>). Its 4 mappers put the
+              # FROZEN agent claims into client_credentials tokens: aud
+              # otel-gateway + agent_id, tenant_id, vm_account_id from the
+              # service-account user attributes. Until v0.8 the same mappers
+              # were created on each client; control-plane moves existing
+              # clients to the scope and deletes those copies (I-33).
+              # Mapper config must stay identical to what v0.8 created.
+              echo "Ensuring agent client scope..."
+
+              AGENT_SCOPE_NAME=mtco-agent
+
+              find_agent_scope() {
+                $KCADM get client-scopes \
+                  -r "$REALM" \
+                  --fields id,name \
+                  --format csv \
+                  --noquotes |
+                while IFS=, read -r ID NAME; do
+                  if [ "$NAME" = "$AGENT_SCOPE_NAME" ]; then
+                    printf '%s\n' "$ID"
+                    break
+                  fi
+                done
+              }
+
+              AGENT_SCOPE_ID=$(find_agent_scope)
+
+              if [ -z "$AGENT_SCOPE_ID" ]; then
+                echo "Creating agent client scope..."
+
+                printf '%s\n' \
+                  "{\"name\":\"$AGENT_SCOPE_NAME\",\"description\":\"MTCO agent claims (keycloak-bootstrap)\",\"protocol\":\"openid-connect\",\"attributes\":{\"include.in.token.scope\":\"false\",\"display.on.consent.screen\":\"false\"}}" |
+                  $KCADM create client-scopes \
+                    -r "$REALM" \
+                    -f -
+
+                AGENT_SCOPE_ID=$(find_agent_scope)
+              fi
+
+              if [ -z "$AGENT_SCOPE_ID" ]; then
+                echo "Agent client scope $AGENT_SCOPE_NAME not found after create"
+                exit 1
+              fi
+
+              # ensure_agent_scope_mapper NAME 'JSON fields after "name"'
+              ensure_agent_scope_mapper() {
+                MAPPER_NAME=$1
+                MAPPER_FIELDS=$2
+
+                MAPPER_ID=$(
+                  $KCADM get \
+                    "client-scopes/$AGENT_SCOPE_ID/protocol-mappers/models" \
+                    -r "$REALM" \
+                    --fields id,name \
+                    --format csv \
+                    --noquotes |
+                  while IFS=, read -r ID NAME; do
+                    if [ "$NAME" = "$MAPPER_NAME" ]; then
+                      printf '%s\n' "$ID"
+                      break
+                    fi
+                  done
+                )
+
+                if [ -z "$MAPPER_ID" ]; then
+                  printf '%s\n' "{\"name\":\"$MAPPER_NAME\",$MAPPER_FIELDS}" |
+                    $KCADM create \
+                      "client-scopes/$AGENT_SCOPE_ID/protocol-mappers/models" \
+                      -r "$REALM" \
+                      -f -
+                else
+                  printf '%s\n' "{\"id\":\"$MAPPER_ID\",\"name\":\"$MAPPER_NAME\",$MAPPER_FIELDS}" |
+                    $KCADM update \
+                      "client-scopes/$AGENT_SCOPE_ID/protocol-mappers/models/$MAPPER_ID" \
+                      -r "$REALM" \
+                      -f -
+                fi
+              }
+
+              ensure_agent_scope_mapper otel-gateway-audience \
+                '"protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"otel-gateway","id.token.claim":"false","access.token.claim":"true","introspection.token.claim":"true"}'
+
+              for PAIR in agent-id:agent_id tenant-id:tenant_id vm-account-id:vm_account_id; do
+                MAPPER=${PAIR%%:*}
+                ATTRIBUTE=${PAIR#*:}
+
+                ensure_agent_scope_mapper "$MAPPER" \
+                  "\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-usermodel-attribute-mapper\",\"consentRequired\":false,\"config\":{\"user.attribute\":\"$ATTRIBUTE\",\"claim.name\":\"$ATTRIBUTE\",\"jsonType.label\":\"String\",\"multivalued\":\"false\",\"aggregate.attrs\":\"false\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"userinfo.token.claim\":\"false\",\"introspection.token.claim\":\"true\"}"
+              done
+
+              echo "Agent client scope ready."
+
+
+              # ========================================
               # User profile: admin-managed custom attributes
               # ========================================
 

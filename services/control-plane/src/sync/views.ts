@@ -59,4 +59,13 @@ export class ResyncResult {
 
   @ApiProperty()
   agentsQueued!: number;
+
+  @ApiProperty({ description: 'Orphan Keycloak objects deleted now' })
+  orphansDeleted!: number;
+
+  @ApiProperty({
+    description:
+      'Orphans seen for the first time (deleted by a resync at least 2 min later if still orphaned)',
+  })
+  orphansPending!: number;
 }

@@ -75,6 +75,12 @@ try:
 except Exception:
     print("  " + raw[:300])
 PYERR
+
+  if [ "$STATUS" -ge 500 ] || [ "$STATUS" = "429" ]; then
+    echo "Temporary problem: run this script again with the SAME token"
+    echo "(it stays valid until it expires)."
+  fi
+
   exit 1
 fi
 

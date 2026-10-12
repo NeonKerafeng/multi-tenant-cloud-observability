@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import type { Queryable } from '../../common/db/database.service';
+import { UpstreamBadResponseError } from '../../common/errors/upstream-error';
 import { KeycloakClient } from '../../integrations/keycloak/keycloak.client';
 import {
   AGENT_MARKER,
   type KcClient,
-  type KcProtocolMapper,
 } from '../../integrations/keycloak/keycloak.types';
 import {
   type AgentRecord,
@@ -19,47 +19,31 @@ export interface AgentCredentials {
   clientSecret: string;
 }
 
-/** Claims every agent token carries (FROZEN contract, §18.3.5). */
-const AGENT_MAPPERS: KcProtocolMapper[] = [
-  {
-    name: 'otel-gateway-audience',
-    protocol: 'openid-connect',
-    protocolMapper: 'oidc-audience-mapper',
-    consentRequired: false,
-    config: {
-      'included.client.audience': 'otel-gateway',
-      'id.token.claim': 'false',
-      'access.token.claim': 'true',
-      'introspection.token.claim': 'true',
-    },
-  },
-  ...['agent_id', 'tenant_id', 'vm_account_id'].map(
-    (attribute): KcProtocolMapper => ({
-      name: attribute.replaceAll('_', '-'),
-      protocol: 'openid-connect',
-      protocolMapper: 'oidc-usermodel-attribute-mapper',
-      consentRequired: false,
-      config: {
-        'user.attribute': attribute,
-        'claim.name': attribute,
-        'jsonType.label': 'String',
-        multivalued: 'false',
-        'aggregate.attrs': 'false',
-        'id.token.claim': 'false',
-        'access.token.claim': 'true',
-        'userinfo.token.claim': 'false',
-        'introspection.token.claim': 'true',
-      },
-    }),
-  ),
+/**
+ * Realm client scope created by the keycloak-bootstrap Job. Its 4 mappers
+ * (audience otel-gateway + agent_id, tenant_id, vm_account_id from the
+ * service-account user attributes) give every agent token the FROZEN
+ * claims (§18.3.5). It is ADDED to the client's default scopes, so the
+ * realm defaults (basic → sub, …) stay exactly as before.
+ */
+export const AGENT_CLIENT_SCOPE = 'mtco-agent';
+
+/**
+ * v0.6–v0.8 created these 4 mappers on every agent client (I-33). The
+ * mirror removes them once the client has the scope (claims unchanged).
+ */
+export const LEGACY_AGENT_MAPPERS = [
+  'otel-gateway-audience',
+  'agent-id',
+  'tenant-id',
+  'vm-account-id',
 ];
 
 /**
  * Agent → confidential Keycloak client `otel-agent-<id>` (service account
  * only). active → enabled, disabled → disabled, revoked → deleted.
- * Credentials are issued inline (the secret is returned once to the host
- * and never stored). v0.9 replaces the per-client mappers with a shared
- * client scope (I-33).
+ * Credentials are issued inline by the enrollment exchange (the secret is
+ * returned once to the host and never stored).
  */
 @Injectable()
 export class KeycloakAgentMirror implements MirrorHandler {
@@ -67,6 +51,9 @@ export class KeycloakAgentMirror implements MirrorHandler {
   readonly aggregate = 'agent' as const;
 
   private readonly logger = new Logger(KeycloakAgentMirror.name);
+
+  /** Id of the mtco-agent scope (stable; dropped on any scope error). */
+  private scopeId: string | null = null;
 
   constructor(
     private readonly keycloak: KeycloakClient,
@@ -126,6 +113,8 @@ export class KeycloakAgentMirror implements MirrorHandler {
       });
     }
 
+    await this.ensureClaims(agent, client.id);
+
     if (client.id !== agent.clientUuid) {
       await this.agents.setClientUuid(agent.id, client.id, q);
     }
@@ -133,7 +122,9 @@ export class KeycloakAgentMirror implements MirrorHandler {
 
   /**
    * Creates (or completes) the client and returns its secret. Idempotent
-   * for the same agent id. Runs inside the caller's transaction.
+   * for the same agent id: a retried exchange (same enrollment → same
+   * agent id) lands on the same client. Runs inside the caller's
+   * transaction.
    */
   async issueCredentials(
     agent: AgentRecord,
@@ -155,36 +146,91 @@ export class KeycloakAgentMirror implements MirrorHandler {
         attributes: { [AGENT_MARKER]: agent.id },
       }));
 
-    const serviceAccount =
-      await this.keycloak.getServiceAccountUser(clientUuid);
-
-    await this.keycloak.updateUser({
-      ...serviceAccount,
-      attributes: {
-        ...(serviceAccount.attributes ?? {}),
-        agent_id: [agent.id],
-        tenant_id: [agent.tenantKey],
-        vm_account_id: [agent.vmAccountId],
-      },
-    });
-
-    const present = new Set(
-      (await this.keycloak.getProtocolMappers(clientUuid)).map(
-        (mapper) => mapper.name,
-      ),
-    );
-
-    for (const mapper of AGENT_MAPPERS) {
-      if (!present.has(mapper.name)) {
-        await this.keycloak.createProtocolMapper(clientUuid, mapper);
-      }
-    }
+    await this.ensureClaims(agent, clientUuid);
 
     const clientSecret = await this.keycloak.getClientSecret(clientUuid);
 
     await this.agents.setClientUuid(agent.id, clientUuid, q);
 
     return { clientId: agent.clientId, clientUuid, clientSecret };
+  }
+
+  /**
+   * The claims of the agent's tokens: service-account attributes (read by
+   * the scope's mappers) + the mtco-agent scope; then the legacy
+   * per-client mappers go (scope FIRST, so no token is ever minted
+   * without the claims).
+   */
+  private async ensureClaims(
+    agent: AgentRecord,
+    clientUuid: string,
+  ): Promise<void> {
+    const serviceAccount =
+      await this.keycloak.getServiceAccountUser(clientUuid);
+
+    const wanted = {
+      agent_id: [agent.id],
+      tenant_id: [agent.tenantKey],
+      vm_account_id: [agent.vmAccountId],
+    };
+
+    const current = serviceAccount.attributes ?? {};
+
+    if (
+      Object.entries(wanted).some(
+        ([key, [value]]) =>
+          current[key]?.length !== 1 || current[key]?.[0] !== value,
+      )
+    ) {
+      await this.keycloak.updateUser({
+        ...serviceAccount,
+        attributes: { ...current, ...wanted },
+      });
+    }
+
+    const scopes = await this.keycloak.getClientDefaultScopes(clientUuid);
+
+    if (!scopes.some((scope) => scope.name === AGENT_CLIENT_SCOPE)) {
+      await this.addScope(clientUuid);
+    }
+
+    const legacy = (await this.keycloak.getProtocolMappers(clientUuid)).filter(
+      (mapper) => mapper.id && LEGACY_AGENT_MAPPERS.includes(mapper.name),
+    );
+
+    for (const mapper of legacy) {
+      await this.keycloak.deleteProtocolMapper(clientUuid, mapper.id as string);
+    }
+
+    if (legacy.length > 0) {
+      this.logger.log(
+        `Agent ${agent.id}: moved to client scope ${AGENT_CLIENT_SCOPE} (${legacy.length} legacy mapper(s) removed)`,
+      );
+    }
+  }
+
+  private async addScope(clientUuid: string): Promise<void> {
+    try {
+      if (this.scopeId === null) {
+        const scope = await this.keycloak.findClientScope(AGENT_CLIENT_SCOPE);
+
+        if (!scope) {
+          throw new UpstreamBadResponseError(
+            'keycloak',
+            404,
+            `client scope ${AGENT_CLIENT_SCOPE} missing: run the keycloak-bootstrap Job`,
+          );
+        }
+
+        this.scopeId = scope.id;
+      }
+
+      await this.keycloak.addClientDefaultScope(clientUuid, this.scopeId);
+    } catch (error) {
+      // The scope may have been re-created with a new id: look it up again.
+      this.scopeId = null;
+      throw error;
+    }
   }
 
   private async resolve(agent: AgentRecord): Promise<KcClient | null> {

@@ -67,6 +67,39 @@ export class DatabaseService implements OnModuleDestroy, Queryable {
     }
   }
 
+  /**
+   * Runs fn only while THIS process holds the session advisory lock `key`
+   * (pg_try_advisory_lock on a dedicated connection, released after).
+   * Another replica holding it → `{ acquired: false }`, fn not run.
+   */
+  async withAdvisoryLock<T>(
+    key: number,
+    fn: () => Promise<T>,
+  ): Promise<{ acquired: true; result: T } | { acquired: false }> {
+    const client = await this.pool.connect();
+
+    try {
+      const { rows } = await client.query<{ locked: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS locked',
+        [key],
+      );
+
+      if (!rows[0]?.locked) {
+        return { acquired: false };
+      }
+
+      try {
+        return { acquired: true, result: await fn() };
+      } finally {
+        await client
+          .query('SELECT pg_advisory_unlock($1)', [key])
+          .catch(() => undefined);
+      }
+    } finally {
+      client.release();
+    }
+  }
+
   /** Dedicated connection for LISTEN/NOTIFY; the caller releases it. */
   connectListener(): Promise<PoolClient> {
     return this.pool.connect();

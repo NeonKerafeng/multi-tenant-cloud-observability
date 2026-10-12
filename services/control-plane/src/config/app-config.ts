@@ -83,6 +83,12 @@ export interface AppConfigValues {
   upstreamTimeoutMs: number;
 
   enrollmentTtlMinutes: number;
+
+  /** Public exchange limits per pod (0 = no limit). */
+  enrollmentExchange: {
+    perIpPerMinute: number;
+    perMinute: number;
+  };
 }
 
 export class ConfigError extends Error {
@@ -106,6 +112,7 @@ export class AppConfig implements AppConfigValues {
   declare readonly outbox: AppConfigValues['outbox'];
   declare readonly upstreamTimeoutMs: number;
   declare readonly enrollmentTtlMinutes: number;
+  declare readonly enrollmentExchange: AppConfigValues['enrollmentExchange'];
 
   constructor(values: AppConfigValues) {
     Object.assign(this, values);
@@ -182,7 +189,12 @@ export class AppConfig implements AppConfigValues {
 
       upstreamTimeoutMs: reader.int('UPSTREAM_TIMEOUT_MS', 10 * 1000),
 
-      enrollmentTtlMinutes: reader.int('ENROLLMENT_TTL_MINUTES', 10),
+      enrollmentTtlMinutes: reader.int('ENROLLMENT_TTL_MINUTES', 10, 1),
+
+      enrollmentExchange: {
+        perIpPerMinute: reader.int('ENROLLMENT_EXCHANGE_PER_IP_PER_MINUTE', 10),
+        perMinute: reader.int('ENROLLMENT_EXCHANGE_PER_MINUTE', 100),
+      },
     };
 
     reader.throwIfProblems();
@@ -234,6 +246,7 @@ export class AppConfig implements AppConfigValues {
       outbox: { workerEnabled: false, pollMs: 5000 },
       upstreamTimeoutMs: 1000,
       enrollmentTtlMinutes: 10,
+      enrollmentExchange: { perIpPerMinute: 10, perMinute: 100 },
       ...overrides,
     });
   }
@@ -275,7 +288,7 @@ class EnvReader {
     return value.replace(/\/+$/, '');
   }
 
-  int(key: string, fallback: number): number {
+  int(key: string, fallback: number, min = 0): number {
     const raw = this.env[key]?.trim();
 
     if (raw === undefined || raw === '') {
@@ -284,8 +297,12 @@ class EnvReader {
 
     const value = Number(raw);
 
-    if (!Number.isInteger(value) || value < 0) {
-      this.problems.push(`${key} must be a non-negative integer`);
+    if (!Number.isInteger(value) || value < min) {
+      this.problems.push(
+        min === 0
+          ? `${key} must be a non-negative integer`
+          : `${key} must be an integer >= ${min}`,
+      );
       return fallback;
     }
 

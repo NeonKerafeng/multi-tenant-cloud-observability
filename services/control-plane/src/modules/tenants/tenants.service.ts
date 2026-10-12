@@ -11,6 +11,7 @@ import { AppConfig } from '../../config/app-config';
 import { KeycloakTenantMirror } from '../../mirrors/keycloak/keycloak-tenant.mirror';
 import { OutboxRepository } from '../../sync/outbox.repository';
 import { AgentRepository } from '../agents/agent.repository';
+import { EnrollmentRepository } from '../enrollments/enrollment.repository';
 import { SupportAccessRepository } from '../support-access/support-access.repository';
 import { UserRepository } from '../users/user.repository';
 
@@ -29,6 +30,7 @@ export class TenantsService {
     private readonly users: UserRepository,
     private readonly agents: AgentRepository,
     private readonly grants: SupportAccessRepository,
+    private readonly enrollments: EnrollmentRepository,
     private readonly outbox: OutboxRepository,
     private readonly keycloakTenants: KeycloakTenantMirror,
     private readonly config: AppConfig,
@@ -74,7 +76,8 @@ export class TenantsService {
 
   /**
    * One transaction: tenant deleted + its users deleted + its agents
-   * revoked (decision Q1) + open support grants ended; the mirrors then
+   * revoked (decision Q1) + open support grants and unused enrollments
+   * ended; the mirrors then
    * delete the Keycloak group/users/clients and the Grafana org.
    * Metrics and logs stay in storage (TODO-08).
    */
@@ -96,6 +99,9 @@ export class TenantsService {
         tenant.id,
         actor.username,
       );
+
+      // Unused tokens of a deleted tenant must not create agents.
+      await this.enrollments.revokeOpenForTenant(tx, tenant.id, actor.userId);
 
       await this.outbox.enqueue(tx, 'tenant', tenant.id);
 

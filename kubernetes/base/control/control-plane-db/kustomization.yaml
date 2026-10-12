@@ -16,3 +16,4 @@ configMapGenerator:
       - 003_sync.sql
       - 004_support_access.sql
       - 005_identity_mirror.sql
+      - 006_agent_enrollments.sql

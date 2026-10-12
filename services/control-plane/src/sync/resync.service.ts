@@ -8,6 +8,7 @@ import {
 import { DatabaseService } from '../common/db/database.service';
 import { ConflictError } from '../common/errors/domain-error';
 import { AppConfig } from '../config/app-config';
+import { KeycloakGarbageCollector } from '../mirrors/keycloak/keycloak-gc';
 import { AgentRepository } from '../modules/agents/agent.repository';
 import { TenantRepository } from '../modules/tenants/tenant.repository';
 import { UserRepository } from '../modules/users/user.repository';
@@ -41,6 +42,7 @@ export class ResyncService implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly tenants: TenantRepository,
     private readonly users: UserRepository,
     private readonly agents: AgentRepository,
+    private readonly gc: KeycloakGarbageCollector,
     private readonly config: AppConfig,
   ) {}
 
@@ -92,10 +94,18 @@ export class ResyncService implements OnApplicationBootstrap, OnModuleDestroy {
         `Resync queued ${tenantIds.length} tenant(s), ${userIds.length} user(s), ${agentIds.length} agent(s)`,
       );
 
+      // Keycloak down must not fail the resync: GC simply waits.
+      const gc = await this.gc.run().catch((error: unknown) => {
+        this.logger.warn(`Keycloak GC skipped: ${String(error)}`);
+        return { deleted: 0, pending: 0 };
+      });
+
       return {
         tenantsQueued: tenantIds.length,
         usersQueued: userIds.length,
         agentsQueued: agentIds.length,
+        orphansDeleted: gc.deleted,
+        orphansPending: gc.pending,
       };
     } finally {
       this.running = false;

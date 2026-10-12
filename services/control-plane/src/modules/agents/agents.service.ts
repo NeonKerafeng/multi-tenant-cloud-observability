@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
-import { randomUUID } from 'node:crypto';
-
 import type { Actor } from '../../common/auth/actor';
-import { DatabaseService } from '../../common/db/database.service';
+import {
+  DatabaseService,
+  type Queryable,
+} from '../../common/db/database.service';
 import { NotFoundError } from '../../common/errors/domain-error';
 import { isUuid } from '../../common/http/validation';
 import { KeycloakAgentMirror } from '../../mirrors/keycloak/keycloak-agent.mirror';
@@ -81,31 +82,35 @@ export class AgentsService {
   }
 
   /**
-   * Creates an agent and its Keycloak credentials in ONE transaction and
-   * returns the secret (shown once, never stored). Keycloak down → no row;
-   * a half-created client is cleaned up by the v0.9 GC.
-   * Only the enrollment exchange calls this.
+   * Creates the agent (id fixed by its enrollment) and its Keycloak
+   * credentials inside the caller's transaction (the enrollment exchange)
+   * and returns the secret (shown once, never stored). Keycloak down → the
+   * transaction rolls back and the host retries with the same token: same
+   * agent id → same Keycloak client.
    */
-  async issue(tenant: TenantRecord): Promise<IssuedAgent> {
-    return this.db.transaction(async (tx) => {
-      const agent = await this.agents.insert(tx, {
-        id: randomUUID(),
-        tenantId: tenant.id,
-        status: 'provisioning',
-      });
-
-      const credentials = await this.keycloakAgents.issueCredentials(agent, tx);
-
-      await this.agents.setStatus(tx, agent.id, 'active');
-      await this.outbox.enqueue(tx, 'agent', agent.id);
-
-      const issued = (await this.agents.findById(agent.id, tx)) ?? agent;
-
-      return {
-        agent: toAgentView(issued),
-        clientSecret: credentials.clientSecret,
-      };
+  async issue(
+    tx: Queryable,
+    tenant: TenantRecord,
+    ref: { agentId: string; enrollmentId: string },
+  ): Promise<IssuedAgent> {
+    const agent = await this.agents.insert(tx, {
+      id: ref.agentId,
+      tenantId: tenant.id,
+      status: 'provisioning',
+      enrollmentId: ref.enrollmentId,
     });
+
+    const credentials = await this.keycloakAgents.issueCredentials(agent, tx);
+
+    await this.agents.setStatus(tx, agent.id, 'active');
+    await this.outbox.enqueue(tx, 'agent', agent.id);
+
+    const issued = (await this.agents.findById(agent.id, tx)) ?? agent;
+
+    return {
+      agent: toAgentView(issued),
+      clientSecret: credentials.clientSecret,
+    };
   }
 
   private async requireAgent(

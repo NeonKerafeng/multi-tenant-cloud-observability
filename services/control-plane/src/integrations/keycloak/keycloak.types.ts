@@ -37,6 +37,12 @@ export interface KcClient {
   [key: string]: unknown;
 }
 
+export interface KcClientScope {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
 export interface KcProtocolMapper {
   id?: string;
   name: string;

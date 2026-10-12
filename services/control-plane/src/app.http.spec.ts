@@ -21,12 +21,14 @@ import { AuthGuard } from './common/auth/auth.guard';
 import { JwtVerifier } from './common/auth/jwt-verifier';
 import { DatabaseService } from './common/db/database.service';
 import { ErrorFilter } from './common/errors/error.filter';
+import { AppConfig } from './config/app-config';
 import { MetricsService } from './common/metrics/metrics.service';
 import { agent, IDS, tenant, user } from './common/testing/fixtures';
 import { ALL_CONTROLLERS, routeInventory } from './common/testing/routes';
 import { AgentsService } from './modules/agents/agents.service';
 import { toAgentView } from './modules/agents/views';
 import { EnrollmentsService } from './modules/enrollments/enrollments.service';
+import { ExchangeRateLimiter } from './modules/enrollments/exchange-rate-limiter';
 import { SupportAccessRepository } from './modules/support-access/support-access.repository';
 import { SupportAccessService } from './modules/support-access/support-access.service';
 import { TenantRepository } from './modules/tenants/tenant.repository';
@@ -119,10 +121,14 @@ const mocks = {
     delete: jest.fn().mockResolvedValue(undefined),
   },
   enrollments: {
-    create: jest.fn(() => ({
-      enrollmentToken: 'enroll-token',
-      expiresAt: '2026-10-11T12:00:00.000Z',
-    })),
+    create: jest.fn(() =>
+      Promise.resolve({
+        enrollmentToken: 'enroll-token',
+        expiresAt: '2026-10-11T12:00:00.000Z',
+      }),
+    ),
+    list: jest.fn().mockResolvedValue([]),
+    revoke: jest.fn().mockResolvedValue(undefined),
     exchange: jest.fn().mockResolvedValue({
       agentId: AGENT_ID,
       clientId: `otel-agent-${AGENT_ID}`,
@@ -172,6 +178,14 @@ beforeAll(async () => {
       { provide: UsersService, useValue: mocks.users },
       { provide: AgentsService, useValue: mocks.agents },
       { provide: EnrollmentsService, useValue: mocks.enrollments },
+      {
+        provide: ExchangeRateLimiter,
+        useValue: new ExchangeRateLimiter(
+          AppConfig.forTest({
+            enrollmentExchange: { perIpPerMinute: 1000, perMinute: 1000 },
+          }),
+        ),
+      },
       { provide: SupportAccessService, useValue: mocks.supportAccess },
       { provide: SupportAccessRepository, useValue: mocks.supportAccessRepo },
       { provide: OutboxRepository, useValue: mocks.outbox },
@@ -477,6 +491,30 @@ describe('agent enrollments', () => {
     );
   });
 
+  it('list 200 and revoke 204 (tenant admin, own tenant)', async () => {
+    await call(
+      'get',
+      api('/tenants/alpha-tenant/agent-enrollments'),
+      'alphaAdmin',
+    ).expect(200);
+    await call(
+      'delete',
+      api(`/tenants/alpha-tenant/agent-enrollments/${GRANT_ID}`),
+      'alphaAdmin',
+    ).expect(204);
+
+    expect(mocks.enrollments.revoke).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tenantKey: 'alpha-tenant' }),
+      GRANT_ID,
+    );
+    await call(
+      'get',
+      api('/tenants/beta-tenant/agent-enrollments'),
+      'alphaAdmin',
+    ).expect(403);
+  });
+
   it('exchange is public, body {token} (FROZEN, client/bootstrap.sh)', async () => {
     const res = await call(
       'post',
@@ -496,7 +534,10 @@ describe('agent enrollments', () => {
         'gatewayEndpoint',
       ]),
     );
-    expect(mocks.enrollments.exchange).toHaveBeenCalledWith('enroll-token');
+    expect(mocks.enrollments.exchange).toHaveBeenCalledWith(
+      'enroll-token',
+      expect.any(String),
+    );
 
     await call('post', api('/agent-enrollments/exchange'), undefined, {
       enrollmentToken: 'enroll-token',

@@ -41,6 +41,8 @@ Usage: mtco <command> [arguments] [options]
   agents enable  AGENT_ID    [--tenant TENANT]
   agents delete  AGENT_ID    [--tenant TENANT]
   enroll                     [--tenant TENANT]   one-time token for a new host
+  enrollments list           [--tenant TENANT]   tokens with their state
+  enrollments revoke ENROLLMENT_ID [--tenant TENANT]   an unused token stops working
 
   access grant  TENANT [--minutes N] [--role Viewer|Editor]   (platform admin, for yourself)
   access list   [TENANT] [--active]
@@ -374,7 +376,28 @@ Enrollment token for $TENANT (works once, expires $(jq -r .expiresAt <<<"$create
 On the host, as root, in the folder with bootstrap.sh and otel/:
   sudo ./bootstrap.sh ${MTCO_PUBLIC_URL:-<control-plane URL reachable from the host>}
 then paste the token. Send ONLY the token to the host owner.
+If the exchange fails half-way, run bootstrap.sh again with the SAME token.
+Enrollment id (for "mtco enrollments revoke"): $(jq -r .id <<<"$created")
 EOF
+}
+
+cmd_enrollments() {
+  local id
+
+  case "$ACTION" in
+    list)
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/agent-enrollments"
+      ;;
+    revoke)
+      id=$(segment ENROLLMENT_ID "$ARG")
+      login
+      resolve_tenant
+      api DELETE "/tenants/$TENANT/agent-enrollments/$id"
+      ;;
+    *) die "enrollments list|revoke (see mtco --help)" ;;
+  esac
 }
 
 cmd_access() {
@@ -446,6 +469,7 @@ case "$COMMAND" in
   users) cmd_users ;;
   agents) cmd_agents ;;
   enroll) cmd_enroll ;;
+  enrollments) cmd_enrollments ;;
   access) cmd_access ;;
   sync) cmd_sync ;;
   help | "") usage ;;

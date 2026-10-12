@@ -198,6 +198,18 @@ export class UserRepository extends BaseRepository<UserRow, UserRecord> {
   }
 
   /** Pointer rule: live users + deleted ones with an unfinished cleanup. */
+  /** The ids among `ids` whose row is active (Keycloak GC). */
+  findActiveIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    return this.ids(
+      `SELECT id FROM users WHERE status = 'active' AND id = ANY($1::uuid[])`,
+      [ids],
+    );
+  }
+
   findIdsForResync(): Promise<string[]> {
     return this.ids(
       `SELECT id FROM users
