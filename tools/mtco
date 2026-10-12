@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+# mtco — command line client of the MTCO control-plane API (/api/v1).
+#
+# Every command asks for your Keycloak password; nothing is stored (the
+# access token lives in a variable of this process only). Inputs are asked
+# FIRST and the sign-in comes LAST, so a slow operator never hits an
+# expired token (tokens live 5 minutes).
+#
+# Requires: bash 4+, curl, jq.
+set -euo pipefail
+
+MTCO_API_URL="${MTCO_API_URL:-http://localhost:18081}"
+MTCO_KEYCLOAK_URL="${MTCO_KEYCLOAK_URL:-http://localhost:8080}"
+MTCO_REALM="${MTCO_REALM:-observability}"
+MTCO_CLIENT_ID="${MTCO_CLIENT_ID:-mtco-cli}"
+
+API="${MTCO_API_URL%/}/api/v1"
+TOKEN=""
+
+usage() {
+  cat <<'USAGE'
+Usage: mtco <command> [arguments] [options]
+
+  me                                   who you are (role, tenant)
+
+  tenants list                         (platform admin)
+  tenants get    TENANT
+  tenants create TENANT
+  tenants delete TENANT                deletes its users, agents and grants too
+
+  users list                 [--tenant TENANT]
+  users create               [--tenant TENANT]   asks for the details
+  users get     USER_ID      [--tenant TENANT]
+  users disable USER_ID      [--tenant TENANT]   blocked at once
+  users enable  USER_ID      [--tenant TENANT]
+  users delete  USER_ID      [--tenant TENANT]
+
+  agents list                [--tenant TENANT]
+  agents get     AGENT_ID    [--tenant TENANT]
+  agents disable AGENT_ID    [--tenant TENANT]
+  agents enable  AGENT_ID    [--tenant TENANT]
+  agents delete  AGENT_ID    [--tenant TENANT]
+  enroll                     [--tenant TENANT]   one-time token for a new host
+
+  access grant  TENANT [--minutes N] [--role Viewer|Editor]   (platform admin, for yourself)
+  access list   [TENANT] [--active]
+  access revoke TENANT GRANT_ID
+  access all    [--active]                       every tenant (platform admin)
+
+  sync status | sync resync                      mirrors of Keycloak/Grafana (platform admin)
+
+--tenant defaults to your own tenant (tenant admins); platform admins must
+give it. Ids are the "id" fields printed by the list commands.
+
+Environment:
+  MTCO_API_URL        control-plane URL            (default http://localhost:18081)
+  MTCO_KEYCLOAK_URL   Keycloak URL                 (default http://localhost:8080)
+  MTCO_USER           your username (skips that prompt; the password is always asked)
+  MTCO_PUBLIC_URL     control-plane URL as seen from agent hosts (printed by "enroll")
+USAGE
+}
+
+die() {
+  echo "mtco: $*" >&2
+  exit 1
+}
+
+for tool in curl jq; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+done
+
+# ---------------------------------------------------------------- arguments
+
+TENANT=""
+MINUTES=""
+GRANT_ROLE=""
+ACTIVE=""
+ARGS=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --tenant) TENANT="${2:?--tenant needs a value}"; shift 2 ;;
+    --tenant=*) TENANT="${1#*=}"; shift ;;
+    --minutes) MINUTES="${2:?--minutes needs a value}"; shift 2 ;;
+    --minutes=*) MINUTES="${1#*=}"; shift ;;
+    --role) GRANT_ROLE="${2:?--role needs a value}"; shift 2 ;;
+    --role=*) GRANT_ROLE="${1#*=}"; shift ;;
+    --active) ACTIVE="true"; shift ;;
+    -h | --help) usage; exit 0 ;;
+    --) shift; ARGS+=("$@"); break ;;
+    -*) die "unknown option $1 (see mtco --help)" ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+COMMAND="${ARGS[0]:-}"
+ACTION="${ARGS[1]:-}"
+ARG="${ARGS[2]:-}"
+ARG2="${ARGS[3]:-}"
+
+# A value used inside a URL path: tenant keys and UUIDs only.
+segment() {
+  local name="$1" value="$2"
+
+  [ -n "$value" ] || die "$name is required (see mtco --help)"
+  [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid $name: $value"
+  printf '%s' "$value"
+}
+
+# ---------------------------------------------------------------- prompts
+
+# ask VAR "Question" [default]
+ask() {
+  local __var="$1" __question="$2" __default="${3:-}" __value
+
+  if [ -n "$__default" ]; then
+    read -r -p "$__question [$__default]: " __value
+    __value="${__value:-$__default}"
+  else
+    read -r -p "$__question: " __value
+  fi
+
+  [ -n "$__value" ] || die "$__question is required"
+  printf -v "$__var" '%s' "$__value"
+}
+
+# ask_new_password VAR (asked twice, never echoed)
+ask_new_password() {
+  local __var="$1" __first __second
+
+  read -r -s -p "New user's password: " __first
+  echo >&2
+  read -r -s -p "Repeat the password: " __second
+  echo >&2
+
+  [ -n "$__first" ] || die "the password is required"
+  [ "$__first" = "$__second" ] || die "the passwords do not match"
+  printf -v "$__var" '%s' "$__first"
+}
+
+# confirm "What happens" WORD — the operator must type WORD.
+confirm() {
+  local answer
+
+  echo "$1" >&2
+  read -r -p "Type '$2' to confirm: " answer
+  [ "$answer" = "$2" ] || die "cancelled"
+}
+
+# ---------------------------------------------------------------- HTTP
+
+# Password grant on the mtco-cli client. The password goes to curl on
+# stdin, never on a command line.
+login() {
+  local username="${MTCO_USER:-}" password response
+
+  if [ -z "$username" ]; then
+    read -r -p "Sign in as (Keycloak username): " username
+  fi
+
+  [ -n "$username" ] || die "a username is required"
+
+  read -r -s -p "Password for $username: " password
+  echo >&2
+
+  response=$(
+    printf '%s' "$password" | curl -sS -X POST \
+      "${MTCO_KEYCLOAK_URL%/}/realms/$MTCO_REALM/protocol/openid-connect/token" \
+      --data-urlencode 'grant_type=password' \
+      --data-urlencode "client_id=$MTCO_CLIENT_ID" \
+      --data-urlencode "username=$username" \
+      --data-urlencode 'password@-'
+  ) || die "cannot reach Keycloak at $MTCO_KEYCLOAK_URL (port-forward running?)"
+
+  password=""
+
+  TOKEN=$(jq -r '.access_token // empty' <<<"$response" 2>/dev/null || true)
+
+  if [ -z "$TOKEN" ]; then
+    die "sign-in failed: $(jq -r '.error_description // .error // "unexpected answer"' <<<"$response" 2>/dev/null || echo "unexpected answer")"
+  fi
+}
+
+# api METHOD PATH [JSON] — prints the JSON answer on stdout; on HTTP >= 400
+# prints `HTTP <status> <code>: <message>` (+ field details) and exits 1.
+# The token goes to curl through a config file descriptor, the body on
+# stdin: neither shows up in `ps`.
+api() {
+  local method="$1" path="$2" body="${3:-}" out status
+  local with_body=()
+
+  if [ -n "$body" ]; then
+    with_body=(-H 'Content-Type: application/json' --data-binary @-)
+  fi
+
+  out=$(mktemp)
+
+  status=$(
+    printf '%s' "$body" | curl -sS -o "$out" -w '%{http_code}' \
+      -X "$method" "$API$path" \
+      --config <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") \
+      "${with_body[@]}"
+  ) || {
+    rm -f "$out"
+    die "cannot reach control-plane at $MTCO_API_URL (port-forward running?)"
+  }
+
+  if [ "$status" -ge 400 ]; then
+    if jq -e '.error.code' "$out" >/dev/null 2>&1; then
+      jq -r --arg status "$status" \
+        '"HTTP \($status) \(.error.code): \(.error.message)",
+         (.error.details // empty
+          | if type == "array"
+            then .[] | "  \(.field): \(.messages | join("; "))"
+            else "  \(tostring)" end)' "$out" >&2
+    else
+      echo "HTTP $status" >&2
+      head -c 300 "$out" >&2 || true
+      echo >&2
+    fi
+
+    rm -f "$out"
+    exit 1
+  fi
+
+  if [ -s "$out" ]; then
+    jq . "$out"
+  else
+    echo "OK (HTTP $status)" >&2
+  fi
+
+  rm -f "$out"
+}
+
+# Tenant of tenant-scoped commands: --tenant, else the caller's own.
+resolve_tenant() {
+  if [ -z "$TENANT" ]; then
+    TENANT=$(api GET /me | jq -r '.tenantKey // empty')
+    [ -n "$TENANT" ] || die "platform admins must name the tenant: --tenant TENANT"
+  fi
+
+  TENANT=$(segment TENANT "$TENANT")
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_tenants() {
+  local key
+
+  case "$ACTION" in
+    list)
+      login
+      api GET /tenants
+      ;;
+    get)
+      key=$(segment TENANT "$ARG")
+      login
+      api GET "/tenants/$key"
+      ;;
+    create)
+      key=$(segment TENANT "$ARG")
+      login
+      api POST /tenants "$(jq -cn --arg k "$key" '{tenantKey: $k}')"
+      ;;
+    delete)
+      key=$(segment TENANT "$ARG")
+      confirm "Deletes tenant $key with ALL its users, agents and support grants; the key can never be used again." "$key"
+      login
+      api DELETE "/tenants/$key"
+      ;;
+    *) die "tenants list|get|create|delete (see mtco --help)" ;;
+  esac
+}
+
+cmd_users() {
+  local id username first last email role password body
+
+  case "$ACTION" in
+    list)
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/users"
+      ;;
+    get)
+      id=$(segment USER_ID "$ARG")
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/users/$id"
+      ;;
+    create)
+      ask username "Username"
+      ask first "First name"
+      ask last "Last name"
+      ask email "Email"
+      ask role "Role (viewer | tenant-admin)" "viewer"
+      ask_new_password password
+
+      body=$(
+        NEW_PASSWORD="$password" jq -cn \
+          --arg username "$username" --arg firstName "$first" \
+          --arg lastName "$last" --arg email "$email" --arg role "$role" \
+          '{username: $username, password: env.NEW_PASSWORD, firstName: $firstName,
+            lastName: $lastName, email: $email, role: $role}'
+      )
+      password=""
+
+      login
+      resolve_tenant
+      api POST "/tenants/$TENANT/users" "$body"
+      ;;
+    enable | disable)
+      id=$(segment USER_ID "$ARG")
+      login
+      resolve_tenant
+      api PATCH "/tenants/$TENANT/users/$id" \
+        "$([ "$ACTION" = enable ] && echo '{"enabled":true}' || echo '{"enabled":false}')"
+      ;;
+    delete)
+      id=$(segment USER_ID "$ARG")
+      confirm "Deletes user $id (Keycloak and Grafana accounts too)." "delete"
+      login
+      resolve_tenant
+      api DELETE "/tenants/$TENANT/users/$id"
+      ;;
+    *) die "users list|create|get|enable|disable|delete (see mtco --help)" ;;
+  esac
+}
+
+cmd_agents() {
+  local id
+
+  case "$ACTION" in
+    list)
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/agents"
+      ;;
+    get)
+      id=$(segment AGENT_ID "$ARG")
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/agents/$id"
+      ;;
+    enable | disable)
+      id=$(segment AGENT_ID "$ARG")
+      login
+      resolve_tenant
+      api PATCH "/tenants/$TENANT/agents/$id" \
+        "$([ "$ACTION" = enable ] && echo '{"enabled":true}' || echo '{"enabled":false}')"
+      ;;
+    delete)
+      id=$(segment AGENT_ID "$ARG")
+      confirm "Revokes agent $id: its host can no longer send data." "delete"
+      login
+      resolve_tenant
+      api DELETE "/tenants/$TENANT/agents/$id"
+      ;;
+    *) die "agents list|get|enable|disable|delete (see mtco --help)" ;;
+  esac
+}
+
+cmd_enroll() {
+  local created
+
+  login
+  resolve_tenant
+  created=$(api POST "/tenants/$TENANT/agent-enrollments")
+
+  cat <<EOF
+Enrollment token for $TENANT (works once, expires $(jq -r .expiresAt <<<"$created")):
+
+  $(jq -r .enrollmentToken <<<"$created")
+
+On the host, as root, in the folder with bootstrap.sh and otel/:
+  sudo ./bootstrap.sh ${MTCO_PUBLIC_URL:-<control-plane URL reachable from the host>}
+then paste the token. Send ONLY the token to the host owner.
+EOF
+}
+
+cmd_access() {
+  local key grant reason body query=""
+
+  [ -z "$ACTIVE" ] || query="?active=true"
+
+  case "$ACTION" in
+    grant)
+      key=$(segment TENANT "$ARG")
+
+      if [ -n "$MINUTES" ] && ! [[ "$MINUTES" =~ ^[0-9]+$ ]]; then
+        die "--minutes must be a number"
+      fi
+
+      ask reason "Reason (ticket id + what you need to check)"
+
+      body=$(
+        jq -cn --arg reason "$reason" --arg minutes "$MINUTES" --arg role "$GRANT_ROLE" \
+          '{reason: $reason}
+           + (if $minutes == "" then {} else {minutes: ($minutes | tonumber)} end)
+           + (if $role == "" then {} else {role: $role} end)'
+      )
+
+      login
+      api POST "/tenants/$key/support-access" "$body"
+      echo "Reload Grafana and switch to the organization $key." >&2
+      ;;
+    list)
+      TENANT="${ARG:-$TENANT}"
+      login
+      resolve_tenant
+      api GET "/tenants/$TENANT/support-access$query"
+      ;;
+    revoke)
+      key=$(segment TENANT "$ARG")
+      grant=$(segment GRANT_ID "$ARG2")
+      login
+      api DELETE "/tenants/$key/support-access/$grant"
+      ;;
+    all)
+      login
+      api GET "/support-access$query"
+      ;;
+    *) die "access grant|list|revoke|all (see mtco --help)" ;;
+  esac
+}
+
+cmd_sync() {
+  case "$ACTION" in
+    status)
+      login
+      api GET /admin/sync/status
+      ;;
+    resync)
+      login
+      api POST /admin/sync/resync
+      ;;
+    *) die "sync status|resync" ;;
+  esac
+}
+
+case "$COMMAND" in
+  me)
+    login
+    api GET /me
+    ;;
+  tenants) cmd_tenants ;;
+  users) cmd_users ;;
+  agents) cmd_agents ;;
+  enroll) cmd_enroll ;;
+  access) cmd_access ;;
+  sync) cmd_sync ;;
+  help | "") usage ;;
+  *) die "unknown command $COMMAND (see mtco --help)" ;;
+esac

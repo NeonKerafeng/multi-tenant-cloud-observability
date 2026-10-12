@@ -1,4 +1,5 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
 
 import { Public } from '../auth/decorators';
 import { DatabaseService } from '../db/database.service';
@@ -8,6 +9,7 @@ import { DatabaseService } from '../db/database.service';
  * (its DB); Keycloak/Grafana outages surface as 503 on the affected calls
  * and as outbox backlog, not as a restart loop.
  */
+@ApiExcludeController()
 @Controller()
 export class HealthController {
   constructor(private readonly db: DatabaseService) {}

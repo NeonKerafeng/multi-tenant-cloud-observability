@@ -65,12 +65,6 @@ export class AgentRepository extends BaseRepository<AgentRow, AgentRecord> {
     );
   }
 
-  listLive(): Promise<AgentRecord[]> {
-    return this.many(
-      `${SELECT} WHERE a.status <> 'revoked' AND t.status = 'active' ORDER BY a.created_at`,
-    );
-  }
-
   async insert(
     q: Queryable,
     agent: { id: string; tenantId: string; status: AgentStatus },

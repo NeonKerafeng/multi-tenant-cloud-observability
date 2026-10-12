@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import type { Actor, Role } from '../../common/auth/actor';
+import type { Actor } from '../../common/auth/actor';
 import {
   DatabaseService,
   PG_UNIQUE_VIOLATION,
@@ -23,32 +23,7 @@ import {
   USERNAME_CONSTRAINT,
 } from './user.repository';
 import { assertCanCreateUser, assertCanManageUser } from './users.policy';
-
-export interface UserView {
-  id: string;
-  tenantKey: string | null;
-  username: string;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  role: Role;
-  enabled: boolean;
-  createdAt: Date;
-}
-
-export function toUserView(user: UserRecord): UserView {
-  return {
-    id: user.id,
-    tenantKey: user.tenantKey,
-    username: user.username,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role,
-    enabled: user.enabled,
-    createdAt: user.createdAt,
-  };
-}
+import { toUserView, type UserView } from './views';
 
 export interface UpdateUserInput {
   enabled?: boolean;
@@ -75,6 +50,17 @@ export class UsersService {
     private readonly outbox: OutboxRepository,
     private readonly keycloakUsers: KeycloakUserMirror,
   ) {}
+
+  /** GET /me: the caller's own user (the guard already loaded it). */
+  async me(actor: Actor): Promise<UserView> {
+    const user = await this.users.findById(actor.userId);
+
+    if (!user) {
+      throw new NotFoundError('user_not_found', 'User not found');
+    }
+
+    return toUserView(user);
+  }
 
   async list(_actor: Actor, tenant: TenantRecord): Promise<UserView[]> {
     return (await this.users.listActiveByTenant(tenant.id)).map(toUserView);

@@ -188,14 +188,19 @@ export class GrafanaUserMirror implements MirrorHandler {
       (await this.grafana.lookupUser(user.email)) ??
       (await this.grafana.lookupUser(user.username));
 
-    const grafanaUserId =
-      found?.id ??
-      (await this.grafana.createUser({
+    let grafanaUserId = found?.id;
+
+    if (grafanaUserId === undefined) {
+      grafanaUserId = await this.grafana.createUser({
         login: user.username,
         email: user.email,
-        name: user.username,
+        name: displayName(user),
         orgId: initialOrgId,
-      }));
+      });
+      this.logger.log(
+        `Grafana user ${grafanaUserId} (${user.username}) created in org ${initialOrgId}`,
+      );
+    }
 
     if (grafanaUserId !== user.grafanaUserId) {
       await this.users.setGrafanaUserId(user.id, grafanaUserId);
@@ -203,4 +208,16 @@ export class GrafanaUserMirror implements MirrorHandler {
 
     return grafanaUserId;
   }
+}
+
+/** "First Last" when both are known, else the username. */
+export function displayName(
+  user: Pick<UserRecord, 'username' | 'firstName' | 'lastName'>,
+): string {
+  const name = [user.firstName, user.lastName]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(' ');
+
+  return name || user.username;
 }

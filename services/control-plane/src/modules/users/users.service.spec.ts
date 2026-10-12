@@ -187,3 +187,17 @@ describe('UsersService.update / delete', () => {
     },
   );
 });
+
+describe('UsersService.me', () => {
+  it("returns the caller's own user view", async () => {
+    const { service, users } = setup();
+    users.findById.mockResolvedValue(user({ id: IDS.alphaViewer }));
+
+    await expect(service.me(ACTORS.alphaViewer)).resolves.toMatchObject({
+      id: IDS.alphaViewer,
+      tenantKey: 'alpha-tenant',
+      role: 'viewer',
+    });
+    expect(users.findById).toHaveBeenCalledWith(IDS.alphaViewer);
+  });
+});

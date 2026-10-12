@@ -12,11 +12,8 @@ declare global {
       requestId?: string;
       /** Set by AuthGuard: the caller, loaded from the DB. */
       actor?: Actor;
-      /**
-       * Set by TenantScopeGuard. `null` only for legacy routes where a
-       * platform admin may omit the tenant (list everything).
-       */
-      tenant?: TenantRecord | null;
+      /** Set by TenantScopeGuard on @TenantScope routes. */
+      tenant?: TenantRecord;
     }
   }
 }

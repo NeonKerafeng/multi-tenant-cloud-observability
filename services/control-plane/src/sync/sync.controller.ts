@@ -1,15 +1,31 @@
-import { Controller, Get, Header, Post } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  HttpStatus,
+  Post,
+} from '@nestjs/common';
+import {
+  ApiAcceptedResponse,
+  ApiExcludeController,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { Public, Roles } from '../common/auth/decorators';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { SupportAccessRepository } from '../modules/support-access/support-access.repository';
 
 import { ALL_TARGETS } from './mirror';
-import { OutboxRepository, type OutboxStatus } from './outbox.repository';
-import { ResyncService, type ResyncResult } from './resync.service';
+import { OutboxRepository } from './outbox.repository';
+import { ResyncService } from './resync.service';
+import { OutboxStatus, ResyncResult } from './views';
 
 /** Operations view of the mirrors (platform-admin only). */
-@Controller('sync')
+@ApiTags('admin')
+@Controller('admin/sync')
+@Roles('platform-admin')
 export class SyncController {
   constructor(
     private readonly outbox: OutboxRepository,
@@ -18,24 +34,30 @@ export class SyncController {
 
   /** Healthy = pending close to 0 and failing 0 for every target. */
   @Get('status')
-  @Roles('platform-admin')
+  @ApiOkResponse({ type: OutboxStatus })
   status(): Promise<OutboxStatus> {
     return this.outbox.status();
   }
 
-  /** Runs the slow resync now (enqueue everything for every mirror). */
+  /**
+   * Queues every live row (and every row still holding a mirror pointer)
+   * for all its mirrors now; the outbox worker does the work.
+   */
   @Post('resync')
-  @Roles('platform-admin')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiAcceptedResponse({ type: ResyncResult })
   runResync(): Promise<ResyncResult> {
     return this.resync.run();
   }
 }
 
 /**
- * Prometheus scrape endpoint. Unauthenticated: operational counters only,
- * no tenant data. Alert on mtco_outbox_failing_events > 0 or
- * mtco_outbox_oldest_pending_seconds growing.
+ * Prometheus scrape endpoint (outside /api/v1). Unauthenticated:
+ * operational counters only, no tenant data. Alert on
+ * mtco_outbox_failing_events > 0 or mtco_outbox_oldest_pending_seconds
+ * growing.
  */
+@ApiExcludeController()
 @Controller('metrics')
 export class MetricsController {
   constructor(

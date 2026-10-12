@@ -13,14 +13,9 @@ import { TenantRepository } from '../modules/tenants/tenant.repository';
 import { UserRepository } from '../modules/users/user.repository';
 
 import { OutboxRepository } from './outbox.repository';
+import type { ResyncResult } from './views';
 
 const STARTUP_DELAY_MS = 15 * 1000;
-
-export interface ResyncResult {
-  tenantsQueued: number;
-  usersQueued: number;
-  agentsQueued: number;
-}
 
 /**
  * Slow safety net (at startup + every GRAFANA_RESYNC_INTERVAL_MS, default

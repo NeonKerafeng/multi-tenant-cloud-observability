@@ -16,7 +16,7 @@ import type {
   UserRepository,
 } from '../../modules/users/user.repository';
 
-import { GrafanaUserMirror } from './grafana-user.mirror';
+import { displayName, GrafanaUserMirror } from './grafana-user.mirror';
 
 function platformAdmin(overrides: Partial<UserRecord> = {}): UserRecord {
   return user({
@@ -83,7 +83,7 @@ describe('GrafanaUserMirror (tenant users)', () => {
     expect(grafana.createUser).toHaveBeenCalledWith({
       login: 'alice',
       email: 'alice@example.com',
-      name: 'alice',
+      name: 'Alice A',
       orgId: 7,
     });
     expect(userRepo.setGrafanaUserId).toHaveBeenCalledWith(user().id, 42);
@@ -240,5 +240,19 @@ describe('GrafanaUserMirror (platform admins, model C)', () => {
 
     expect(grafana.updateOrgUserRole).not.toHaveBeenCalled();
     expect(grafana.removeOrgUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('displayName (Grafana account name, F-d)', () => {
+  it('"First Last", else the username', () => {
+    expect(displayName(user({ firstName: 'Alice', lastName: 'A' }))).toBe(
+      'Alice A',
+    );
+    expect(displayName(user({ firstName: ' Alice ', lastName: null }))).toBe(
+      'Alice',
+    );
+    expect(displayName(user({ firstName: null, lastName: '  ' }))).toBe(
+      'alice',
+    );
   });
 });

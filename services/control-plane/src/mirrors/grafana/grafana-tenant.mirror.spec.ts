@@ -1,3 +1,5 @@
+import type { Logger } from '@nestjs/common';
+
 import type { DatabaseService } from '../../common/db/database.service';
 import { IDS, tenant } from '../../common/testing/fixtures';
 import { AppConfig } from '../../config/app-config';
@@ -109,6 +111,15 @@ describe('GrafanaTenantMirror (active)', () => {
   });
 });
 
+function logSpies(mirror: GrafanaTenantMirror) {
+  const logger = (mirror as unknown as { logger: Logger }).logger;
+
+  return {
+    warn: jest.spyOn(logger, 'warn').mockImplementation(() => undefined),
+    debug: jest.spyOn(logger, 'debug').mockImplementation(() => undefined),
+  };
+}
+
 describe('GrafanaTenantMirror (deleted)', () => {
   it('deletes the org and clears the pointer', async () => {
     const { mirror, grafana, tenants } = setup(tenant({ status: 'deleted' }));
@@ -127,6 +138,35 @@ describe('GrafanaTenantMirror (deleted)', () => {
 
     expect(grafana.retireOrg).toHaveBeenCalledWith(7, '[deleted] alpha-tenant');
     expect(tenants.setGrafanaOrgId).not.toHaveBeenCalled();
+  });
+
+  it('warns on the first refusal only; later resyncs of the retired org log at debug (F-b)', async () => {
+    const first = setup(tenant({ status: 'deleted' }));
+    first.grafana.deleteOrg.mockResolvedValue('refused');
+    const firstLog = logSpies(first.mirror);
+
+    await first.mirror.sync(IDS.alpha);
+
+    expect(firstLog.warn).toHaveBeenCalledTimes(1);
+    expect(firstLog.debug).not.toHaveBeenCalled();
+
+    const again = setup(tenant({ status: 'deleted' }));
+    again.grafana.deleteOrg.mockResolvedValue('refused');
+    again.grafana.getOrg.mockResolvedValue({
+      id: 7,
+      name: '[deleted] alpha-tenant',
+    });
+    const againLog = logSpies(again.mirror);
+
+    await again.mirror.sync(IDS.alpha);
+
+    expect(again.grafana.deleteOrg).toHaveBeenCalledWith(7);
+    expect(again.grafana.retireOrg).toHaveBeenCalledWith(
+      7,
+      '[deleted] alpha-tenant',
+    );
+    expect(againLog.warn).not.toHaveBeenCalled();
+    expect(againLog.debug).toHaveBeenCalledTimes(1);
   });
 
   it('never deletes org 1, nor another tenant org behind a stale id', async () => {

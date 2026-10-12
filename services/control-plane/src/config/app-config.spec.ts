@@ -29,6 +29,19 @@ describe('AppConfig.fromEnv', () => {
     expect(config.supportAccess).toEqual({ maxMinutes: 480, sweepMs: 30000 });
     expect(config.outbox).toEqual({ workerEnabled: true, pollMs: 5000 });
     expect(config.enrollmentTtlMinutes).toBe(10);
+    expect(config.logLevels).toEqual(['fatal', 'error', 'warn', 'log']);
+  });
+
+  it('LOG_LEVEL keeps the levels down to the one named', () => {
+    expect(
+      AppConfig.fromEnv({ ...REQUIRED, LOG_LEVEL: 'debug' }).logLevels,
+    ).toEqual(['fatal', 'error', 'warn', 'log', 'debug']);
+    expect(
+      AppConfig.fromEnv({ ...REQUIRED, LOG_LEVEL: 'WARN' }).logLevels,
+    ).toEqual(['fatal', 'error', 'warn']);
+    expect(() => AppConfig.fromEnv({ ...REQUIRED, LOG_LEVEL: 'loud' })).toThrow(
+      'LOG_LEVEL must be one of fatal, error, warn, log, debug, verbose',
+    );
   });
 
   it('lists every problem at once', () => {

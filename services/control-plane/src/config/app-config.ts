@@ -6,8 +6,23 @@
  * `AppConfig.forTest({...overrides})`.
  */
 
+import type { LogLevel } from '@nestjs/common';
+
+/** From the most to the least severe; LOG_LEVEL keeps a prefix of it. */
+export const LOG_LEVELS: readonly LogLevel[] = [
+  'fatal',
+  'error',
+  'warn',
+  'log',
+  'debug',
+  'verbose',
+];
+
 export interface AppConfigValues {
   port: number;
+
+  /** LOG_LEVEL (default `log`): `debug` also shows debug lines. */
+  logLevels: LogLevel[];
 
   db: {
     host: string;
@@ -79,6 +94,7 @@ export class ConfigError extends Error {
 
 export class AppConfig implements AppConfigValues {
   declare readonly port: number;
+  declare readonly logLevels: LogLevel[];
   declare readonly db: AppConfigValues['db'];
   declare readonly keycloak: AppConfigValues['keycloak'];
   declare readonly otelGatewayPublicUrl: string;
@@ -101,6 +117,8 @@ export class AppConfig implements AppConfigValues {
 
     const values: AppConfigValues = {
       port: reader.int('PORT', 8080),
+
+      logLevels: reader.logLevels('LOG_LEVEL', 'log'),
 
       db: {
         host: reader.required('DB_HOST'),
@@ -176,6 +194,7 @@ export class AppConfig implements AppConfigValues {
   static forTest(overrides: Partial<AppConfigValues> = {}): AppConfig {
     return new AppConfig({
       port: 8080,
+      logLevels: ['fatal', 'error', 'warn', 'log'],
       db: {
         host: 'db',
         port: 5432,
@@ -290,6 +309,19 @@ class EnvReader {
 
     this.problems.push(`${key} must be true or false`);
     return fallback;
+  }
+
+  /** `warn` → fatal, error, warn. */
+  logLevels(key: string, fallback: LogLevel): LogLevel[] {
+    const raw = (this.env[key]?.trim().toLowerCase() || fallback) as LogLevel;
+    const index = LOG_LEVELS.indexOf(raw);
+
+    if (index < 0) {
+      this.problems.push(`${key} must be one of ${LOG_LEVELS.join(', ')}`);
+      return LOG_LEVELS.slice(0, LOG_LEVELS.indexOf(fallback) + 1);
+    }
+
+    return LOG_LEVELS.slice(0, index + 1);
   }
 
   throwIfProblems(): void {

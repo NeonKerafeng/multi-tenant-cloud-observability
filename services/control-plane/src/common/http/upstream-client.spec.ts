@@ -47,9 +47,10 @@ function setup(replies: Reply[]) {
         );
   });
 
-  const client = new TestClient(AppConfig.forTest(), new MetricsService());
+  const metrics = new MetricsService();
+  const client = new TestClient(AppConfig.forTest(), metrics);
 
-  return { client, calls };
+  return { client, calls, metrics };
 }
 
 describe('UpstreamClient', () => {
@@ -130,5 +131,22 @@ describe('UpstreamClient', () => {
     await expect(
       client.request({ method: 'GET', path: '/a' }),
     ).rejects.toBeInstanceOf(UpstreamBadResponseError);
+  });
+
+  it('labels handled non-2xx answers expected_<status>, real failures http_<status>', async () => {
+    const { client, metrics } = setup([404, 409]);
+
+    await client.request({ method: 'GET', path: '/lookup', accept: [404] });
+    await expect(
+      client.request({ method: 'POST', path: '/create' }),
+    ).rejects.toBeInstanceOf(UpstreamBadResponseError);
+
+    const text = await metrics.registry.getSingleMetricAsString(
+      'mtco_upstream_request_duration_seconds',
+    );
+
+    expect(text).toContain('outcome="expected_404"');
+    expect(text).toContain('outcome="http_409"');
+    expect(text).not.toContain('outcome="http_404"');
   });
 });

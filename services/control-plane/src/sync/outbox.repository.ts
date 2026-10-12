@@ -9,6 +9,7 @@ import {
   MIRROR_TARGETS,
   type Target,
 } from './mirror';
+import type { OutboxStatus, TargetStatus } from './views';
 
 export interface OutboxEvent {
   id: string;
@@ -18,23 +19,6 @@ export interface OutboxEvent {
   attempts: number;
   /** requested_seq at claim time (lost-update guard, I-30). */
   claimedSeq: number;
-}
-
-export interface TargetStatus {
-  pending: number;
-  failing: number;
-  oldestPendingSeconds: number;
-}
-
-export interface OutboxStatus {
-  targets: Record<Target, TargetStatus>;
-  recentErrors: {
-    target: Target;
-    aggregateType: Aggregate;
-    aggregateId: string;
-    attempts: number;
-    lastError: string | null;
-  }[];
 }
 
 interface EventRow {

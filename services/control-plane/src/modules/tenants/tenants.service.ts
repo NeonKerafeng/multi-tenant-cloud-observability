@@ -15,24 +15,7 @@ import { SupportAccessRepository } from '../support-access/support-access.reposi
 import { UserRepository } from '../users/user.repository';
 
 import { type TenantRecord, TenantRepository } from './tenant.repository';
-
-export interface TenantView {
-  tenantKey: string;
-  vmAccountId: string;
-  grafanaOrgId: number | null;
-  status: TenantRecord['status'];
-  createdAt: Date;
-}
-
-export function toTenantView(tenant: TenantRecord): TenantView {
-  return {
-    tenantKey: tenant.tenantKey,
-    vmAccountId: tenant.vmAccountId,
-    grafanaOrgId: tenant.grafanaOrgId,
-    status: tenant.status,
-    createdAt: tenant.createdAt,
-  };
-}
+import { type TenantView, toTenantView } from './views';
 
 /**
  * Tenant lifecycle. Authorization (platform-admin, tenant scope) is done

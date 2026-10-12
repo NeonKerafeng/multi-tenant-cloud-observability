@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsIn,
@@ -13,8 +14,14 @@ import { trimString } from '../../common/http/validation';
 export const GRANT_ROLES = ['Viewer', 'Editor'] as const;
 export type GrantRole = (typeof GRANT_ROLES)[number];
 
-/** POST /tenants/:tenant/support-access. Upper bound of minutes: service. */
+/** POST /tenants/{tenantKey}/support-access. Upper bound of minutes: service. */
 export class GrantDto {
+  @ApiProperty({
+    minLength: 10,
+    maxLength: 500,
+    example: 'TICKET-42 dashboard shows no data',
+    description: 'Audited: a ticket id and what you need to check',
+  })
   @Transform(trimString)
   @IsString()
   @Length(10, 500, {
@@ -23,17 +30,32 @@ export class GrantDto {
   })
   reason!: string;
 
+  @ApiPropertyOptional({
+    minimum: 5,
+    default: 60,
+    description: 'At most SUPPORT_ACCESS_MAX_MINUTES (480 by default)',
+  })
   @IsOptional()
   @IsInt()
   @Min(5)
   minutes?: number;
 
+  @ApiPropertyOptional({ enum: GRANT_ROLES, default: 'Viewer' })
   @IsOptional()
   @IsIn(GRANT_ROLES)
   role?: GrantRole;
 }
 
-/** `?active=true|1` → only grants in effect now. */
-export function activeOnly(value: unknown): boolean {
-  return value === 'true' || value === '1';
+const BOOLEAN_STRINGS = ['true', 'false', '1', '0'] as const;
+
+/** `?active=true` → only grants in effect now. */
+export class ListGrantsQuery {
+  @ApiPropertyOptional({ enum: BOOLEAN_STRINGS })
+  @IsOptional()
+  @IsIn(BOOLEAN_STRINGS)
+  active?: (typeof BOOLEAN_STRINGS)[number];
+}
+
+export function activeOnly(query: ListGrantsQuery): boolean {
+  return query.active === 'true' || query.active === '1';
 }

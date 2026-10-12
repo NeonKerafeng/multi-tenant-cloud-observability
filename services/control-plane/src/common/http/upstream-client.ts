@@ -180,7 +180,14 @@ export abstract class UpstreamClient {
         signal: AbortSignal.timeout(this.config.upstreamTimeoutMs),
       });
 
-      outcome = response.ok ? 'ok' : `http_${response.status}`;
+      // `expected_<status>`: a non-2xx the caller handles as a normal
+      // answer (404 on a lookup, 409 on create, Grafana's 500 on org
+      // delete); `http_<status>`: a real failure (F-b).
+      outcome = response.ok
+        ? 'ok'
+        : req.accept?.includes(response.status)
+          ? `expected_${response.status}`
+          : `http_${response.status}`;
 
       return response;
     } finally {

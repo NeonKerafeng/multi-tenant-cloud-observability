@@ -8,7 +8,6 @@ import {
 } from '../../common/testing/fixtures';
 import type { KeycloakAgentMirror } from '../../mirrors/keycloak/keycloak-agent.mirror';
 import type { OutboxRepository } from '../../sync/outbox.repository';
-import type { TenantRepository } from '../tenants/tenant.repository';
 
 import type { AgentRecord, AgentRepository } from './agent.repository';
 import { AgentsService } from './agents.service';
@@ -25,12 +24,10 @@ function setup(found: AgentRecord | null = agent()) {
     findById: jest.fn((id: string) => Promise.resolve(agent({ id }))),
     findLiveById: jest.fn().mockResolvedValue(found),
     listLiveByTenant: jest.fn().mockResolvedValue([agent()]),
-    listLive: jest.fn().mockResolvedValue([agent()]),
     setStatus: jest.fn().mockResolvedValue(undefined),
     markRevoked: jest.fn().mockResolvedValue(undefined),
   };
 
-  const tenants = { findById: jest.fn().mockResolvedValue(tenant()) };
   const outbox = { enqueue: jest.fn().mockResolvedValue(undefined) };
   const keycloakAgents = {
     issueCredentials: jest.fn().mockResolvedValue({
@@ -43,7 +40,6 @@ function setup(found: AgentRecord | null = agent()) {
   const service = new AgentsService(
     db as unknown as DatabaseService,
     agents as unknown as AgentRepository,
-    tenants as unknown as TenantRepository,
     outbox as unknown as OutboxRepository,
     keycloakAgents as unknown as KeycloakAgentMirror,
   );
@@ -87,6 +83,18 @@ describe('AgentsService', () => {
     expect(outbox.enqueue).toHaveBeenCalledWith(tx, 'agent', IDS.agent);
   });
 
+  it('a PATCH without a change writes nothing', async () => {
+    const { service, agents, outbox } = setup();
+
+    await service.update(ACTORS.alphaAdmin, tenant(), IDS.agent, {
+      enabled: true,
+    });
+    await service.update(ACTORS.alphaAdmin, tenant(), IDS.agent, {});
+
+    expect(agents.setStatus).not.toHaveBeenCalled();
+    expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
   it('delete = revoke + outbox', async () => {
     const { service, agents, outbox, tx } = setup();
 
@@ -106,29 +114,21 @@ describe('AgentsService', () => {
     });
   });
 
-  it('legacy tenantOfAgent: tenant admin of another tenant → forbidden', async () => {
-    const { service } = setup();
+  it('a malformed id is a plain 404 (no DB lookup)', async () => {
+    const { service, agents } = setup();
 
     await expect(
-      service.tenantOfAgent(ACTORS.betaAdmin, IDS.agent),
-    ).rejects.toMatchObject({
-      code: 'forbidden',
-    });
-    await expect(
-      service.tenantOfAgent(ACTORS.platformAdmin, IDS.agent),
-    ).resolves.toMatchObject({
-      id: IDS.alpha,
-    });
+      service.get(ACTORS.alphaAdmin, tenant(), 'not-a-uuid'),
+    ).rejects.toMatchObject({ code: 'agent_not_found' });
+    expect(agents.findLiveById).not.toHaveBeenCalled();
   });
 
-  it('listAll is for platform admins only', async () => {
-    const { service } = setup();
+  it('lists the live agents of the tenant', async () => {
+    const { service, agents } = setup();
 
-    await expect(service.listAll(ACTORS.alphaAdmin)).rejects.toMatchObject({
-      code: 'forbidden',
-    });
-    await expect(service.listAll(ACTORS.platformAdmin)).resolves.toHaveLength(
-      1,
-    );
+    await expect(
+      service.list(ACTORS.alphaAdmin, tenant()),
+    ).resolves.toHaveLength(1);
+    expect(agents.listLiveByTenant).toHaveBeenCalledWith(IDS.alpha);
   });
 });

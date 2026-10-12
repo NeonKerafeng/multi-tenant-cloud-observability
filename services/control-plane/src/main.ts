@@ -3,19 +3,17 @@ import './common/http/request-context';
 import { NestFactory } from '@nestjs/core';
 
 import { AppModule } from './app.module';
-import { RequestContextMiddleware } from './common/http/request-context.middleware';
-import { createValidationPipe } from './common/http/validation';
-import { MetricsService } from './common/metrics/metrics.service';
+import { configureApp } from './app.setup';
 import { AppConfig } from './config/app-config';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
-  // Before any route: request id, access log, HTTP histogram.
-  const requestContext = new RequestContextMiddleware(app.get(MetricsService));
-  app.use(requestContext.use.bind(requestContext));
+  // LOG_LEVEL (default log): debug lines (e.g. retired Grafana orgs that
+  // still cannot be deleted, rejected tokens) only with LOG_LEVEL=debug.
+  app.useLogger(app.get(AppConfig).logLevels);
 
-  app.useGlobalPipes(createValidationPipe());
+  configureApp(app);
 
   /*
    * SIGTERM -> onModuleDestroy: the outbox worker, resync and sweeper

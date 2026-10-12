@@ -6,6 +6,7 @@ import { defaultDashboards } from '../../integrations/grafana/default-dashboards
 import {
   GrafanaClient,
   type GrafanaDatasourceDefinition,
+  type GrafanaOrg,
 } from '../../integrations/grafana/grafana.client';
 import { SupportAccessRepository } from '../../modules/support-access/support-access.repository';
 import {
@@ -109,27 +110,39 @@ export class GrafanaTenantMirror implements MirrorHandler {
       return;
     }
 
-    const orgId = await this.findOwnOrg(tenant);
+    const org = await this.findOwnOrg(tenant);
 
-    if (orgId === null) {
+    if (org === null) {
       await this.tenants.setGrafanaOrgId(tenant.id, null);
       return;
     }
 
-    if ((await this.grafana.deleteOrg(orgId)) === 'deleted') {
+    if ((await this.grafana.deleteOrg(org.id)) === 'deleted') {
       this.logger.log(
-        `Deleted Grafana org ${orgId} of tenant ${tenant.tenantKey}`,
+        `Deleted Grafana org ${org.id} of tenant ${tenant.tenantKey}`,
       );
       await this.tenants.setGrafanaOrgId(tenant.id, null);
       return;
     }
 
-    await this.grafana.retireOrg(orgId, retiredOrgName(tenant.tenantKey));
+    const retiredName = retiredOrgName(tenant.tenantKey);
+    const alreadyRetired = org.name === retiredName;
 
-    this.logger.warn(
-      `Grafana refused to delete org ${orgId} of tenant ${tenant.tenantKey}; ` +
-        'retired it (emptied + renamed), the resync will retry the delete',
-    );
+    // Level-triggered: re-empty it every time (someone may have added a
+    // member or a datasource by hand since).
+    await this.grafana.retireOrg(org.id, retiredName);
+
+    // Every hourly resync gets here again until Grafana can delete orgs:
+    // only the first refusal is worth a warning (F-b).
+    const message =
+      `Grafana refused to delete org ${org.id} of tenant ${tenant.tenantKey}; ` +
+      'retired it (emptied + renamed), the resync will retry the delete';
+
+    if (alreadyRetired) {
+      this.logger.debug(message);
+    } else {
+      this.logger.warn(message);
+    }
   }
 
   /**
@@ -138,7 +151,7 @@ export class GrafanaTenantMirror implements MirrorHandler {
    * rebuild a stored id may belong to another tenant: never touch it then.
    * Never returns org 1.
    */
-  private async findOwnOrg(tenant: TenantRecord): Promise<number | null> {
+  private async findOwnOrg(tenant: TenantRecord): Promise<GrafanaOrg | null> {
     const names = [tenant.tenantKey, retiredOrgName(tenant.tenantKey)];
 
     const org =
@@ -147,14 +160,14 @@ export class GrafanaTenantMirror implements MirrorHandler {
         : await this.grafana.getOrg(tenant.grafanaOrgId);
 
     if (org && names.includes(org.name)) {
-      return org.id;
+      return org;
     }
 
     for (const name of names) {
       const byName = await this.grafana.findOrgByName(name);
 
       if (byName && byName.id !== DEFAULT_GRAFANA_ORG_ID) {
-        return byName.id;
+        return byName;
       }
     }
 

@@ -5,10 +5,7 @@ import type { TenantRepository } from '../../modules/tenants/tenant.repository';
 import { ACTORS, IDS, tenant } from '../testing/fixtures';
 
 import type { Actor } from './actor';
-import {
-  TenantScopeGuard,
-  type TenantScopeOptions,
-} from './tenant-scope.guard';
+import { TenantScopeGuard } from './tenant-scope.guard';
 
 const alpha = tenant();
 const beta = tenant({
@@ -22,17 +19,9 @@ const gone = tenant({
   status: 'deleted',
 });
 
-function setup(
-  options: TenantScopeOptions,
-  actor: Actor,
-  request: {
-    params?: Record<string, string>;
-    query?: Record<string, string>;
-  } = {},
-) {
+function setup(actor: Actor, tenantKey?: string, scoped = true) {
   const req: Record<string, unknown> = {
-    params: request.params ?? {},
-    query: request.query ?? {},
+    params: tenantKey === undefined ? {} : { tenantKey },
     actor,
   };
 
@@ -42,123 +31,73 @@ function setup(
     switchToHttp: () => ({ getRequest: () => req }),
   } as unknown as ExecutionContext;
 
-  const all = [alpha, beta, gone];
-
   const tenants = {
     findByKey: jest.fn((key: string) =>
-      Promise.resolve(all.find((t) => t.tenantKey === key) ?? null),
-    ),
-    findById: jest.fn((id: string) =>
-      Promise.resolve(all.find((t) => t.id === id) ?? null),
+      Promise.resolve(
+        [alpha, beta, gone].find((t) => t.tenantKey === key) ?? null,
+      ),
     ),
   };
 
   const guard = new TenantScopeGuard(
-    { getAllAndOverride: () => options } as unknown as Reflector,
+    { getAllAndOverride: () => scoped } as unknown as Reflector,
     tenants as unknown as TenantRepository,
   );
 
-  return { guard, context, req };
+  return { guard, context, req, tenants };
 }
 
-describe('TenantScopeGuard from param', () => {
-  const param: TenantScopeOptions = { from: 'param', param: 'tenantKey' };
-
+describe('TenantScopeGuard', () => {
   it('platform admin: any active tenant', async () => {
-    const { guard, context, req } = setup(param, ACTORS.platformAdmin, {
-      params: { tenantKey: 'beta-tenant' },
-    });
+    const { guard, context, req } = setup(ACTORS.platformAdmin, 'beta-tenant');
 
-    await guard.canActivate(context);
+    await expect(guard.canActivate(context)).resolves.toBe(true);
     expect(req.tenant).toBe(beta);
   });
 
-  it('tenant admin: own tenant', async () => {
-    const { guard, context, req } = setup(param, ACTORS.alphaAdmin, {
-      params: { tenantKey: 'alpha-tenant' },
-    });
+  it('tenant admin and viewer: their own tenant', async () => {
+    for (const actor of [ACTORS.alphaAdmin, ACTORS.alphaViewer]) {
+      const { guard, context, req } = setup(actor, 'alpha-tenant');
 
-    await guard.canActivate(context);
-    expect(req.tenant).toBe(alpha);
+      await guard.canActivate(context);
+      expect(req.tenant).toBe(alpha);
+    }
   });
 
-  it('tenant admin: another tenant is forbidden', async () => {
-    const { guard, context } = setup(param, ACTORS.alphaAdmin, {
-      params: { tenantKey: 'beta-tenant' },
-    });
+  it('another tenant → 403 forbidden', async () => {
+    const { guard, context, req } = setup(ACTORS.alphaAdmin, 'beta-tenant');
 
     await expect(guard.canActivate(context)).rejects.toMatchObject({
       code: 'forbidden',
+      status: 403,
     });
+    expect(req.tenant).toBeUndefined();
   });
 
-  it.each(['gone-tenant', 'nope'])('%s → 404 tenant_not_found', async (key) => {
-    const { guard, context } = setup(param, ACTORS.platformAdmin, {
-      params: { tenantKey: key },
-    });
+  it.each([
+    ['unknown', 'nope'],
+    ['deleted', 'gone-tenant'],
+    ['empty', ''],
+  ])(
+    '%s tenant → 404 tenant_not_found (platform admin too)',
+    async (_l, key) => {
+      const { guard, context } = setup(ACTORS.platformAdmin, key);
 
-    await expect(guard.canActivate(context)).rejects.toMatchObject({
-      code: 'tenant_not_found',
-    });
-  });
-});
+      await expect(guard.canActivate(context)).rejects.toMatchObject({
+        code: 'tenant_not_found',
+        status: 404,
+      });
+    },
+  );
 
-describe('TenantScopeGuard from actor-home (v0.7 legacy)', () => {
-  it('uses the actor tenant', async () => {
-    const { guard, context, req } = setup(
-      { from: 'actor-home' },
+  it('routes without @TenantScope are untouched', async () => {
+    const { guard, context, tenants } = setup(
       ACTORS.alphaAdmin,
+      'beta-tenant',
+      false,
     );
 
-    await guard.canActivate(context);
-    expect(req.tenant).toBe(alpha);
-  });
-
-  it('platform admin has none → tenant_required', async () => {
-    const { guard, context } = setup(
-      { from: 'actor-home' },
-      ACTORS.platformAdmin,
-    );
-
-    await expect(guard.canActivate(context)).rejects.toMatchObject({
-      code: 'tenant_required',
-    });
-  });
-});
-
-describe('TenantScopeGuard from query (v0.7 legacy GET /agents)', () => {
-  const query: TenantScopeOptions = { from: 'query', query: 'tenant' };
-
-  it('platform admin without ?tenant → null (everything)', async () => {
-    const { guard, context, req } = setup(query, ACTORS.platformAdmin);
-
-    await guard.canActivate(context);
-    expect(req.tenant).toBeNull();
-  });
-
-  it('platform admin with ?tenant → that tenant', async () => {
-    const { guard, context, req } = setup(query, ACTORS.platformAdmin, {
-      query: { tenant: 'beta-tenant' },
-    });
-
-    await guard.canActivate(context);
-    expect(req.tenant).toBe(beta);
-  });
-
-  it('tenant admin without ?tenant → own tenant', async () => {
-    const { guard, context, req } = setup(query, ACTORS.alphaAdmin);
-
-    await guard.canActivate(context);
-    expect(req.tenant).toBe(alpha);
-  });
-
-  it('tenant admin naming another tenant → forbidden', async () => {
-    const { guard, context } = setup(query, ACTORS.alphaAdmin, {
-      query: { tenant: 'beta-tenant' },
-    });
-
-    await expect(guard.canActivate(context)).rejects.toMatchObject({
-      code: 'forbidden',
-    });
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(tenants.findByKey).not.toHaveBeenCalled();
   });
 });

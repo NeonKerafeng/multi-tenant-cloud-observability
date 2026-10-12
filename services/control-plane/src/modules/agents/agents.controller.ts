@@ -1,4 +1,14 @@
-import { Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+} from '@nestjs/common';
+import { ApiNoContentResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 
 import type { Actor } from '../../common/auth/actor';
 import {
@@ -10,86 +20,64 @@ import {
 import type { ListResponse } from '../../common/http/list';
 import type { TenantRecord } from '../tenants/tenant.repository';
 
-import { type AgentView, AgentsService } from './agents.service';
+import { AgentsService } from './agents.service';
+import { UpdateAgentDto } from './dto';
+import { AgentList, AgentView } from './views';
 
 /**
- * v0.7 LEGACY routes (flat /agents, tenant from the actor or ?tenant=).
- * v0.8 replaces them with /api/v1/tenants/{tenantKey}/agents and drops
- * POST /agents (agents come from enrollment only, decision Q4).
+ * Agents of one tenant. They are created only by an enrollment exchange
+ * (POST /agent-enrollments/exchange), never directly (decision Q4).
  */
-@Controller('agents')
+@ApiTags('agents')
+@Controller('tenants/:tenantKey/agents')
 @Roles('platform-admin', 'tenant-admin')
+@TenantScope()
 export class AgentsController {
   constructor(private readonly agents: AgentsService) {}
 
-  /** Legacy direct creation (tenant-admin, own tenant). Removed in v0.8. */
-  @Post()
-  @Roles('tenant-admin')
-  @TenantScope({ from: 'actor-home' })
-  async create(
-    @CurrentTenant() tenant: TenantRecord,
-  ): Promise<AgentView & { agentId: string; clientSecret: string }> {
-    const issued = await this.agents.issue(tenant);
-
-    return {
-      ...issued.agent,
-      agentId: issued.agent.id,
-      clientSecret: issued.clientSecret,
-    };
-  }
-
   @Get()
-  @TenantScope({ from: 'query', query: 'tenant' })
+  @ApiOkResponse({ type: AgentList })
   async list(
     @CurrentActor() actor: Actor,
-    @CurrentTenant() tenant: TenantRecord | null,
+    @CurrentTenant() tenant: TenantRecord,
   ): Promise<ListResponse<AgentView>> {
-    return {
-      items: tenant
-        ? await this.agents.list(actor, tenant)
-        : await this.agents.listAll(actor),
-    };
+    return { items: await this.agents.list(actor, tenant) };
   }
 
   @Get(':agentId')
-  async get(
+  @ApiOkResponse({ type: AgentView })
+  get(
     @CurrentActor() actor: Actor,
+    @CurrentTenant() tenant: TenantRecord,
     @Param('agentId') agentId: string,
   ): Promise<AgentView> {
-    const tenant = await this.agents.tenantOfAgent(actor, agentId);
-
     return this.agents.get(actor, tenant, agentId);
   }
 
-  @Post(':agentId/disable')
-  async disable(
+  /**
+   * `{"enabled": false}` disables the Keycloak client: the agent cannot get
+   * a new token (the current one stays valid until it expires).
+   */
+  @Patch(':agentId')
+  @ApiOkResponse({ type: AgentView })
+  update(
     @CurrentActor() actor: Actor,
+    @CurrentTenant() tenant: TenantRecord,
     @Param('agentId') agentId: string,
+    @Body() body: UpdateAgentDto,
   ): Promise<AgentView> {
-    const tenant = await this.agents.tenantOfAgent(actor, agentId);
-
-    return this.agents.update(actor, tenant, agentId, { enabled: false });
+    return this.agents.update(actor, tenant, agentId, body);
   }
 
-  @Post(':agentId/enable')
-  async enable(
-    @CurrentActor() actor: Actor,
-    @Param('agentId') agentId: string,
-  ): Promise<AgentView> {
-    const tenant = await this.agents.tenantOfAgent(actor, agentId);
-
-    return this.agents.update(actor, tenant, agentId, { enabled: true });
-  }
-
+  /** Revokes the agent; its Keycloak client is deleted. */
   @Delete(':agentId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Revoked' })
   async delete(
     @CurrentActor() actor: Actor,
+    @CurrentTenant() tenant: TenantRecord,
     @Param('agentId') agentId: string,
-  ): Promise<{ agentId: string; deleted: true }> {
-    const tenant = await this.agents.tenantOfAgent(actor, agentId);
-
+  ): Promise<void> {
     await this.agents.delete(actor, tenant, agentId);
-
-    return { agentId, deleted: true };
   }
 }

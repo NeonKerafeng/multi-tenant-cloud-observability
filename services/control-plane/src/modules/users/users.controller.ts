@@ -1,6 +1,23 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import {
+  ApiCreatedResponse,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import type { Actor } from '../../common/auth/actor';
+import { ROLES } from '../../common/auth/actor';
 import {
   CurrentActor,
   CurrentTenant,
@@ -10,20 +27,24 @@ import {
 import type { ListResponse } from '../../common/http/list';
 import type { TenantRecord } from '../tenants/tenant.repository';
 
-import { CreateUserDto } from './dto';
-import { type UserView, UsersService } from './users.service';
+import { CreateUserDto, UpdateUserDto } from './dto';
+import { UsersService } from './users.service';
+import { UserList, UserView } from './views';
 
 /**
- * v0.7 LEGACY routes (same URLs as v0.6; v0.8 moves to /api/v1 + PATCH).
- * `:userId` is the control-plane user id (UUID) from v0.7 on.
+ * Users of one tenant. Tenant admins manage viewers of their own tenant;
+ * platform admins manage tenant admins and viewers of any tenant
+ * (users.policy.ts).
  */
-@Controller('tenants/:tenantId/users')
+@ApiTags('users')
+@Controller('tenants/:tenantKey/users')
 @Roles('platform-admin', 'tenant-admin')
-@TenantScope({ from: 'param', param: 'tenantId' })
+@TenantScope()
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Get()
+  @ApiOkResponse({ type: UserList })
   async list(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
@@ -31,16 +52,9 @@ export class UsersController {
     return { items: await this.users.list(actor, tenant) };
   }
 
-  @Get(':userId')
-  get(
-    @CurrentActor() actor: Actor,
-    @CurrentTenant() tenant: TenantRecord,
-    @Param('userId') userId: string,
-  ): Promise<UserView> {
-    return this.users.get(actor, tenant, userId);
-  }
-
+  /** Creates the user and its Keycloak account (with the password) now. */
   @Post()
+  @ApiCreatedResponse({ type: UserView })
   create(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
@@ -49,32 +63,50 @@ export class UsersController {
     return this.users.create(actor, tenant, body);
   }
 
-  @Post(':userId/disable')
-  disable(
+  @Get(':userId')
+  @ApiOkResponse({ type: UserView })
+  get(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
     @Param('userId') userId: string,
   ): Promise<UserView> {
-    return this.users.update(actor, tenant, userId, { enabled: false });
+    return this.users.get(actor, tenant, userId);
   }
 
-  @Post(':userId/enable')
-  enable(
+  /** `{"enabled": false}` blocks the user's next request at once. */
+  @Patch(':userId')
+  @ApiOkResponse({ type: UserView })
+  update(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
     @Param('userId') userId: string,
+    @Body() body: UpdateUserDto,
   ): Promise<UserView> {
-    return this.users.update(actor, tenant, userId, { enabled: true });
+    return this.users.update(actor, tenant, userId, body);
   }
 
   @Delete(':userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Deleted' })
   async delete(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
     @Param('userId') userId: string,
-  ): Promise<{ id: string; deleted: true }> {
+  ): Promise<void> {
     await this.users.delete(actor, tenant, userId);
+  }
+}
 
-    return { id: userId, deleted: true };
+/** The caller itself (every role). */
+@ApiTags('me')
+@Controller('me')
+@Roles(...ROLES)
+export class MeController {
+  constructor(private readonly users: UsersService) {}
+
+  @Get()
+  @ApiOkResponse({ type: UserView })
+  me(@CurrentActor() actor: Actor): Promise<UserView> {
+    return this.users.me(actor);
   }
 }

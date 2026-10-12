@@ -21,6 +21,8 @@ export const MIRROR_TARGETS: Readonly<Record<Aggregate, readonly Target[]>> = {
 
 export const ALL_TARGETS: readonly Target[] = ['keycloak', 'grafana'];
 
+export const AGGREGATES: readonly Aggregate[] = ['tenant', 'user', 'agent'];
+
 export interface MirrorHandler {
   readonly target: Target;
   readonly aggregate: Aggregate;

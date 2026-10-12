@@ -1,4 +1,5 @@
 import { Body, Controller, Post } from '@nestjs/common';
+import { ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
 
 import type { Actor } from '../../common/auth/actor';
 import {
@@ -11,23 +12,24 @@ import {
 import type { TenantRecord } from '../tenants/tenant.repository';
 
 import { ExchangeDto } from './dto';
-import {
-  type EnrollmentCreated,
-  EnrollmentsService,
-  type ExchangeResult,
-} from './enrollments.service';
+import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentCreated, ExchangeResult } from './views';
 
 /**
- * v0.7 LEGACY routes. v0.8: POST /api/v1/tenants/{tenantKey}/agent-enrollments
- * (platform admins too) and POST /api/v1/agent-enrollments/exchange.
+ * Agent enrollment: an admin creates a one-time token for a tenant; the
+ * host trades it for its credentials. The tenant of the exchange comes
+ * from the token record, never from the caller.
  */
-@Controller('agent-enrollments')
+@ApiTags('agent-enrollments')
+@Controller()
 export class EnrollmentsController {
   constructor(private readonly enrollments: EnrollmentsService) {}
 
-  @Post()
-  @Roles('tenant-admin')
-  @TenantScope({ from: 'actor-home' })
+  /** Platform admins too, for any tenant (I-22a). */
+  @Post('tenants/:tenantKey/agent-enrollments')
+  @Roles('platform-admin', 'tenant-admin')
+  @TenantScope()
+  @ApiCreatedResponse({ type: EnrollmentCreated })
   create(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
@@ -35,8 +37,10 @@ export class EnrollmentsController {
     return this.enrollments.create(actor, tenant);
   }
 
-  @Post('exchange')
+  /** Public: called by client/bootstrap.sh on the host, once per token. */
+  @Post('agent-enrollments/exchange')
   @Public()
+  @ApiCreatedResponse({ type: ExchangeResult })
   exchange(@Body() body: ExchangeDto): Promise<ExchangeResult> {
     return this.enrollments.exchange(body.token);
   }

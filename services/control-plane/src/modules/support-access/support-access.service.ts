@@ -23,41 +23,9 @@ import {
   type SupportAccessRecord,
   SupportAccessRepository,
 } from './support-access.repository';
+import { type GrantView, toGrantView } from './views';
 
 export const DEFAULT_GRANT_MINUTES = 60;
-
-export interface GrantView {
-  id: string;
-  tenantKey: string;
-  username: string;
-  role: SupportAccessRecord['role'];
-  reason: string;
-  grantedBy: string;
-  createdAt: Date;
-  expiresAt: Date;
-  revokedAt: Date | null;
-  revokedBy: string | null;
-  active: boolean;
-}
-
-export function toGrantView(
-  grant: SupportAccessRecord,
-  now = Date.now(),
-): GrantView {
-  return {
-    id: grant.id,
-    tenantKey: grant.tenantKey,
-    username: grant.username,
-    role: grant.role,
-    reason: grant.reason,
-    grantedBy: grant.grantedBy,
-    createdAt: grant.createdAt,
-    expiresAt: grant.expiresAt,
-    revokedAt: grant.revokedAt,
-    revokedBy: grant.revokedBy,
-    active: grant.revokedAt === null && grant.expiresAt.getTime() > now,
-  };
-}
 
 /**
  * Model C (D-04): platform admins live in the platform org (Grafana org 1).

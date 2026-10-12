@@ -1,4 +1,18 @@
-import { Body, Controller, Delete, Get, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+} from '@nestjs/common';
+import {
+  ApiCreatedResponse,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import type { Actor } from '../../common/auth/actor';
 import {
@@ -9,26 +23,39 @@ import {
 } from '../../common/auth/decorators';
 import type { ListResponse } from '../../common/http/list';
 
-import { LegacyCreateTenantDto } from './dto';
+import { CreateTenantDto } from './dto';
 import type { TenantRecord } from './tenant.repository';
-import { TenantsService, type TenantView } from './tenants.service';
+import { TenantsService } from './tenants.service';
+import { TenantList, TenantView } from './views';
 
-/**
- * v0.7 LEGACY routes (same URLs as v0.6; replaced by /api/v1 in v0.8).
- * `:tenantId` is the tenant key.
- */
+@ApiTags('tenants')
 @Controller('tenants')
-@Roles('platform-admin')
 export class TenantsController {
   constructor(private readonly tenants: TenantsService) {}
 
   @Get()
+  @Roles('platform-admin')
+  @ApiOkResponse({ type: TenantList })
   async list(@CurrentActor() actor: Actor): Promise<ListResponse<TenantView>> {
     return { items: await this.tenants.list(actor) };
   }
 
-  @Get(':tenantId')
-  @TenantScope({ from: 'param', param: 'tenantId' })
+  /** Creates the tenant, its Keycloak group (now) and Grafana org (async). */
+  @Post()
+  @Roles('platform-admin')
+  @ApiCreatedResponse({ type: TenantView })
+  create(
+    @CurrentActor() actor: Actor,
+    @Body() body: CreateTenantDto,
+  ): Promise<TenantView> {
+    return this.tenants.create(actor, body.tenantKey);
+  }
+
+  /** Tenant admins may read their own tenant. */
+  @Get(':tenantKey')
+  @Roles('platform-admin', 'tenant-admin')
+  @TenantScope()
+  @ApiOkResponse({ type: TenantView })
   get(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
@@ -36,22 +63,19 @@ export class TenantsController {
     return this.tenants.get(actor, tenant);
   }
 
-  @Post()
-  create(
-    @CurrentActor() actor: Actor,
-    @Body() body: LegacyCreateTenantDto,
-  ): Promise<TenantView> {
-    return this.tenants.create(actor, body.tenantId);
-  }
-
-  @Delete(':tenantId')
-  @TenantScope({ from: 'param', param: 'tenantId' })
+  /**
+   * Deletes the tenant with its users, agents and support grants; Keycloak
+   * and Grafana follow through the outbox. The key is never reusable.
+   */
+  @Delete(':tenantKey')
+  @Roles('platform-admin')
+  @TenantScope()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({ description: 'Deleted' })
   async delete(
     @CurrentActor() actor: Actor,
     @CurrentTenant() tenant: TenantRecord,
-  ): Promise<{ tenantKey: string; deleted: true }> {
+  ): Promise<void> {
     await this.tenants.delete(actor, tenant);
-
-    return { tenantKey: tenant.tenantKey, deleted: true };
   }
 }

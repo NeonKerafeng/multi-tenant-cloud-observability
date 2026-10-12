@@ -34,22 +34,53 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+RESPONSE_FILE=""
+ENV_TMP=""
+trap 'rm -f -- ${RESPONSE_FILE:+"$RESPONSE_FILE"} ${ENV_TMP:+"$ENV_TMP"}' EXIT
+
 read -rsp "Enrollment token: " ENROLLMENT_TOKEN
 echo
 
 echo "Exchanging enrollment token..."
 
-RESPONSE=$(
-  curl -fsS \
+RESPONSE_FILE=$(mktemp)
+
+STATUS=$(
+  curl -sS \
+    -o "$RESPONSE_FILE" \
+    -w '%{http_code}' \
     -X POST \
-    "$CONTROL_PLANE_URL/agent-enrollments/exchange" \
+    "$CONTROL_PLANE_URL/api/v1/agent-enrollments/exchange" \
     -H 'Content-Type: application/json' \
     --data-binary @- <<EOF
 {"token":"$ENROLLMENT_TOKEN"}
 EOF
-)
+) || {
+  echo "Cannot reach control-plane at $CONTROL_PLANE_URL"
+  exit 1
+}
 
 unset ENROLLMENT_TOKEN
+
+if [ "$STATUS" != "201" ] && [ "$STATUS" != "200" ]; then
+  echo "Enrollment failed (HTTP $STATUS):"
+  python3 - "$RESPONSE_FILE" <<'PYERR'
+import json, sys
+
+raw = open(sys.argv[1]).read()
+
+try:
+    error = json.loads(raw)["error"]
+    print("  " + error["code"] + ": " + error["message"])
+except Exception:
+    print("  " + raw[:300])
+PYERR
+  exit 1
+fi
+
+RESPONSE=$(cat "$RESPONSE_FILE")
+rm -f "$RESPONSE_FILE"
+RESPONSE_FILE=""
 
 AGENT_ID=$(
   printf '%s' "$RESPONSE" |
@@ -87,7 +118,6 @@ install -m 644 \
   /etc/mtco-agent/agent.yaml
 
 ENV_TMP=$(mktemp)
-trap 'rm -f "$ENV_TMP"' EXIT
 
 cat > "$ENV_TMP" <<EOF
 OTEL_AGENT_CLIENT_ID=$CLIENT_ID

@@ -15,21 +15,7 @@ import {
   TenantRepository,
 } from '../tenants/tenant.repository';
 
-export interface EnrollmentCreated {
-  /** FROZEN field name (tools/tenant-admin/create-enrollment.sh). */
-  enrollmentToken: string;
-  expiresAt: string;
-}
-
-/** FROZEN fields used by client/bootstrap.sh (§18.3.6). */
-export interface ExchangeResult {
-  agentId: string;
-  clientId: string;
-  tenantKey: string;
-  clientSecret: string;
-  tokenUrl: string;
-  gatewayEndpoint: string;
-}
+import type { EnrollmentCreated, ExchangeResult } from './views';
 
 interface PendingEnrollment {
   tenantId: string;
