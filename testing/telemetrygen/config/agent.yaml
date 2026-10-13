@@ -1,0 +1,36 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+
+extensions:
+  oauth2client/agent:
+    client_id: ${env:OTEL_AGENT_CLIENT_ID}
+    client_secret: ${env:OTEL_AGENT_CLIENT_SECRET}
+    token_url: ${env:KEYCLOAK_TOKEN_URL}
+    expiry_buffer: 10s
+
+exporters:
+  otlp_http/gateway:
+    endpoint: ${env:OTEL_GATEWAY_ENDPOINT}
+    auth:
+      authenticator: oauth2client/agent
+
+service:
+  extensions:
+    - oauth2client/agent
+
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/gateway]
+
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/gateway]

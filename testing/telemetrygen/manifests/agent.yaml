@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-otel-agent
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-otel-agent
+  template:
+    metadata:
+      labels:
+        app: test-otel-agent
+    spec:
+      containers:
+        - name: otel-agent
+          image: otel/opentelemetry-collector-contrib:0.160.0
+          args:
+            - --config=/etc/otelcol-contrib/config.yaml
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+          env:
+            - name: OTEL_AGENT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: test-otel-agent-credentials
+                  key: client_id
+            - name: OTEL_AGENT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: test-otel-agent-credentials
+                  key: client_secret
+            - name: KEYCLOAK_TOKEN_URL
+              value: http://keycloak:8080/realms/observability/protocol/openid-connect/token
+            - name: OTEL_GATEWAY_ENDPOINT
+              value: http://otel-gateway:4318
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib/config.yaml
+              subPath: agent.yaml
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: test-otel-agent-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-otel-agent
+  namespace: observability
+spec:
+  selector:
+    app: test-otel-agent
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317

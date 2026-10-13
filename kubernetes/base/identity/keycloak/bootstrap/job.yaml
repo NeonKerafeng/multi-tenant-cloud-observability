@@ -64,6 +64,15 @@ spec:
                   name: control-plane-keycloak
                   key: client_secret
 
+            # TODO-04 door: public URL of the web UI (optional; the script
+            # falls back to http://localhost:18090).
+            - name: UI_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: platform-endpoints
+                  key: UI_PUBLIC_URL
+                  optional: true
+
           command:
             - /bin/sh
             - -ec
@@ -949,6 +958,90 @@ spec:
                 -s unmanagedAttributePolicy=ADMIN_EDIT
 
               echo "User profile unmanagedAttributePolicy=ADMIN_EDIT."
+
+
+              # ========================================
+              # Control-plane UI client (TODO-01)
+              # ========================================
+
+              # Browser login for the web UI: public client, Authorization
+              # Code + PKCE S256 only (no password grant, no implicit flow).
+              # TODO-04 door: UI_PUBLIC_URL (optional key of ConfigMap
+              # platform-endpoints) is where the browser opens the UI; it sets
+              # the allowed redirect / post-logout URIs and web origin.
+              UI_CLIENT_ID=control-plane-ui
+              UI_URL=${UI_PUBLIC_URL:-http://localhost:18090}
+
+              echo "Ensuring control-plane UI client ($UI_URL)..."
+
+              find_client_uuid() {
+                $KCADM get clients \
+                  -r "$REALM" \
+                  -q clientId="$1" \
+                  --fields id \
+                  --format csv \
+                  --noquotes
+              }
+
+              UI_CLIENT_UUID=$(find_client_uuid "$UI_CLIENT_ID")
+
+              if [ -z "$UI_CLIENT_UUID" ]; then
+                $KCADM create clients \
+                  -r "$REALM" \
+                  -s "clientId=$UI_CLIENT_ID"
+
+                UI_CLIENT_UUID=$(find_client_uuid "$UI_CLIENT_ID")
+              fi
+
+              $KCADM update "clients/$UI_CLIENT_UUID" \
+                -r "$REALM" \
+                -s enabled=true \
+                -s protocol=openid-connect \
+                -s publicClient=true \
+                -s standardFlowEnabled=true \
+                -s implicitFlowEnabled=false \
+                -s directAccessGrantsEnabled=false \
+                -s serviceAccountsEnabled=false \
+                -s "redirectUris=[\"$UI_URL/*\"]" \
+                -s "webOrigins=[\"$UI_URL\"]" \
+                -s 'attributes."pkce.code.challenge.method"=S256' \
+                -s "attributes.\"post.logout.redirect.uris\"=$UI_URL/*"
+
+              # ensure_client_mapper CLIENT_UUID NAME 'JSON fields after "name"'
+              ensure_client_mapper() {
+                MAPPER_ID=$(
+                  $KCADM get "clients/$1/protocol-mappers/models" \
+                    -r "$REALM" \
+                    --fields id,name \
+                    --format csv \
+                    --noquotes |
+                  while IFS=, read -r ID NAME; do
+                    if [ "$NAME" = "$2" ]; then
+                      printf '%s\n' "$ID"
+                      break
+                    fi
+                  done
+                )
+
+                if [ -z "$MAPPER_ID" ]; then
+                  printf '{"name":"%s",%s}\n' "$2" "$3" |
+                    $KCADM create "clients/$1/protocol-mappers/models" \
+                      -r "$REALM" \
+                      -f -
+                else
+                  printf '{"id":"%s","name":"%s",%s}\n' "$MAPPER_ID" "$2" "$3" |
+                    $KCADM update "clients/$1/protocol-mappers/models/$MAPPER_ID" \
+                      -r "$REALM" \
+                      -f -
+                fi
+              }
+
+              # control-plane only checks iss, aud=control-plane and sub
+              # (roles and tenant come from its own DB).
+              ensure_client_mapper "$UI_CLIENT_UUID" control-plane-audience \
+                '"protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"control-plane","id.token.claim":"false","access.token.claim":"true","introspection.token.claim":"true"}'
+
+              echo "Control-plane UI client ready."
 
 
               # ========================================

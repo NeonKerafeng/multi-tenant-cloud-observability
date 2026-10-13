@@ -1,0 +1,109 @@
+# DRAFT (TODO-20 parked 2026-10-08). Validated with otelcol-contrib 0.161.0
+# (`validate` + local run: file_log parsing OK). Not deployable yet: needs a
+# token path whose issuer matches otel-gateway (TODO-04, or a Host-rewriting
+# proxy). See WORK_NOTES.md TODO-20.
+# Fake host agent (TESTING ONLY). Mirrors client/otel/agent.yaml, except:
+# - logs come from a generated file (file_log) instead of journald;
+# - an in-cluster OTLP/gRPC receiver (no auth) lets load-test/spoof-test
+#   push extra data through this tenant's credentials;
+# - tokens are requested through fleet-keycloak-proxy so their issuer
+#   matches what otel-gateway expects (see testing/README.md, I-10).
+receivers:
+  host_metrics:
+    collection_interval: 15s
+    scrapers:
+      cpu:
+      memory:
+      load:
+      disk:
+      network:
+      filesystem:
+        exclude_mount_points:
+          match_type: regexp
+          mount_points: ["/dev.*", "/proc.*", "/sys.*", "/etc/.*", "/var/log/fleet"]
+
+  file_log:
+    include: [/var/log/fleet/app.log]
+    start_at: end
+    operators:
+      - type: regex_parser
+        regex: '^(?P<ts>\S+) (?P<level>[A-Z]+) (?P<service>\S+) (?P<msg>.*)$'
+        timestamp:
+          parse_from: attributes.ts
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05Z'
+        severity:
+          parse_from: attributes.level
+      - type: move
+        from: attributes.msg
+        to: body
+      - type: remove
+        field: attributes.ts
+
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 100
+    spike_limit_mib: 25
+
+  # host.name = pod hostname = pod name -> every replica is one "machine".
+  resource_detection/system:
+    detectors: [system]
+    override: false
+    system:
+      hostname_sources: [os]
+      resource_attributes:
+        host.name:
+          enabled: true
+        host.arch:
+          enabled: true
+        os.type:
+          enabled: true
+        os.description:
+          enabled: true
+        os.version:
+          enabled: true
+
+  resource/fleet:
+    attributes:
+      - key: mtco.testing
+        value: "true"
+        action: upsert
+
+  batch:
+
+extensions:
+  oauth2client/agent:
+    client_id: ${env:OTEL_AGENT_CLIENT_ID}
+    client_secret: ${env:OTEL_AGENT_CLIENT_SECRET}
+    token_url: ${env:KEYCLOAK_TOKEN_URL}
+    expiry_buffer: 10s
+
+exporters:
+  otlp_http/gateway:
+    endpoint: ${env:OTEL_GATEWAY_ENDPOINT}
+    auth:
+      authenticator: oauth2client/agent
+
+service:
+  extensions: [oauth2client/agent]
+
+  telemetry:
+    metrics:
+      level: none
+
+  pipelines:
+    metrics:
+      receivers: [host_metrics, otlp]
+      processors: [memory_limiter, resource_detection/system, resource/fleet, batch]
+      exporters: [otlp_http/gateway]
+
+    logs:
+      receivers: [file_log, otlp]
+      processors: [memory_limiter, resource_detection/system, resource/fleet, batch]
+      exporters: [otlp_http/gateway]

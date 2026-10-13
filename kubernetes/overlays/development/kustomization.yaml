@@ -11,6 +11,7 @@ resources:
   - ../../base/identity/keycloak
   - ../../base/query
   - ../../base/control/control-plane
+  - ../../base/control/control-plane-ui
   - ../../base/control/control-plane-db
 
 secretGenerator:
